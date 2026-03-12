@@ -63,6 +63,7 @@ type SubnetState = {
   updateVlsmRequest: (id: string, patch: Partial<VlsmRequestItem>) => void;
   removeVlsmRequest: (id: string) => void;
   calculateVlsmLayout: () => void;
+  clearVlsm: () => void; // <--- ADDED
   setTrainingDifficulty: (d: 'beginner' | 'intermediate' | 'advanced') => void;
   setQuestionCount: (n: number) => void;
   startTrainingSession: () => void;
@@ -84,77 +85,22 @@ async function persistHistory(items: RecentCalculation[]) { try { await AsyncSto
 async function persistSessions(items: TrainingSession[]) { try { await AsyncStorage.setItem(SESSIONS_KEY, JSON.stringify(items)); } catch {} }
 
 /* ── Training Question Generator ── */
+// ... (Keeping generator math same to avoid breaking anything)
 function randomInt(min: number, max: number) { return Math.floor(Math.random() * (max - min + 1)) + min; }
-
-function cidrToMask(cidr: number): string {
-  const m = cidr === 0 ? 0 : (~0 << (32 - cidr)) >>> 0;
-  return [(m >>> 24) & 255, (m >>> 16) & 255, (m >>> 8) & 255, m & 255].join('.');
-}
-
-function cidrToWildcard(cidr: number): string {
-  const m = cidr === 0 ? 0 : (~0 << (32 - cidr)) >>> 0;
-  const w = (~m) >>> 0;
-  return [(w >>> 24) & 255, (w >>> 16) & 255, (w >>> 8) & 255, w & 255].join('.');
-}
-
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
-  return a;
-}
-
+function cidrToMask(cidr: number): string { const m = cidr === 0 ? 0 : (~0 << (32 - cidr)) >>> 0; return [(m >>> 24) & 255, (m >>> 16) & 255, (m >>> 8) & 255, m & 255].join('.'); }
+function cidrToWildcard(cidr: number): string { const m = cidr === 0 ? 0 : (~0 << (32 - cidr)) >>> 0; const w = (~m) >>> 0; return [(w >>> 24) & 255, (w >>> 16) & 255, (w >>> 8) & 255, w & 255].join('.'); }
+function shuffle<T>(arr: T[]): T[] { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 function generateDistractors(correct: string, type: string, count = 3): string[] {
   const d = new Set<string>();
-  if (type === 'mask') {
-    const masks = ['255.0.0.0','255.128.0.0','255.192.0.0','255.224.0.0','255.240.0.0','255.248.0.0','255.252.0.0','255.254.0.0','255.255.0.0','255.255.128.0','255.255.192.0','255.255.224.0','255.255.240.0','255.255.248.0','255.255.252.0','255.255.254.0','255.255.255.0','255.255.255.128','255.255.255.192','255.255.255.224','255.255.255.240','255.255.255.248','255.255.255.252','255.255.255.254','255.255.255.255'].filter(m => m !== correct);
-    for (const m of shuffle(masks)) { if (d.size >= count) break; d.add(m); }
-  } else if (type === 'cidr') {
-    const n = parseInt(correct.replace('/', ''), 10);
-    for (const c of shuffle([n-2,n-1,n+1,n+2,n-4,n+4].filter(x => x >= 0 && x <= 32 && x !== n))) { if (d.size >= count) break; d.add(`/${c}`); }
-  } else if (type === 'number') {
-    const n = parseInt(correct.replace(/,/g, ''), 10);
-    for (const c of shuffle([...new Set([n*2,Math.floor(n/2),n-2,n+2,n*4,Math.floor(n/4),n+1,n-1].filter(x => x > 0 && x !== n))])) { if (d.size >= count) break; d.add(c.toLocaleString()); }
-  } else if (type === 'ip') {
-    const parts = correct.split('.').map(Number);
-    for (let i = 0; i < 15 && d.size < count; i++) {
-      const np = [...parts]; np[randomInt(2,3)] = Math.min(255, Math.max(0, np[randomInt(2,3)] + randomInt(-10,10)));
-      const c = np.join('.'); if (c !== correct) d.add(c);
-    }
-  } else if (type === 'wildcard') {
-    const wcs = ['0.0.0.0','0.0.0.1','0.0.0.3','0.0.0.7','0.0.0.15','0.0.0.31','0.0.0.63','0.0.0.127','0.0.0.255','0.0.1.255','0.0.3.255','0.0.7.255','0.0.15.255','0.0.31.255','0.0.63.255','0.0.127.255','0.0.255.255','0.255.255.255'].filter(w => w !== correct);
-    for (const w of shuffle(wcs)) { if (d.size >= count) break; d.add(w); }
-  }
+  if (type === 'mask') { const masks = ['255.0.0.0','255.128.0.0','255.192.0.0','255.224.0.0','255.240.0.0','255.248.0.0','255.252.0.0','255.254.0.0','255.255.0.0','255.255.128.0','255.255.192.0','255.255.224.0','255.255.240.0','255.255.248.0','255.255.252.0','255.255.254.0','255.255.255.0','255.255.255.128','255.255.255.192','255.255.255.224','255.255.255.240','255.255.255.248','255.255.255.252','255.255.255.254','255.255.255.255'].filter(m => m !== correct); for (const m of shuffle(masks)) { if (d.size >= count) break; d.add(m); } } else if (type === 'cidr') { const n = parseInt(correct.replace('/', ''), 10); for (const c of shuffle([n-2,n-1,n+1,n+2,n-4,n+4].filter(x => x >= 0 && x <= 32 && x !== n))) { if (d.size >= count) break; d.add(`/${c}`); } } else if (type === 'number') { const n = parseInt(correct.replace(/,/g, ''), 10); for (const c of shuffle([...new Set([n*2,Math.floor(n/2),n-2,n+2,n*4,Math.floor(n/4),n+1,n-1].filter(x => x > 0 && x !== n))])) { if (d.size >= count) break; d.add(c.toLocaleString()); } } else if (type === 'ip') { const parts = correct.split('.').map(Number); for (let i = 0; i < 15 && d.size < count; i++) { const np = [...parts]; np[randomInt(2,3)] = Math.min(255, Math.max(0, np[randomInt(2,3)] + randomInt(-10,10))); const c = np.join('.'); if (c !== correct) d.add(c); } } else if (type === 'wildcard') { const wcs = ['0.0.0.0','0.0.0.1','0.0.0.3','0.0.0.7','0.0.0.15','0.0.0.31','0.0.0.63','0.0.0.127','0.0.0.255','0.0.1.255','0.0.3.255','0.0.7.255','0.0.15.255','0.0.31.255','0.0.63.255','0.0.127.255','0.0.255.255','0.255.255.255'].filter(w => w !== correct); for (const w of shuffle(wcs)) { if (d.size >= count) break; d.add(w); } }
   while (d.size < count) d.add(`N/A ${d.size + 1}`);
   return [...d].slice(0, count);
 }
-
 function generateQuestion(difficulty: 'beginner' | 'intermediate' | 'advanced'): TrainingQuestion {
-  const types: TrainingQuestion['type'][] =
-    difficulty === 'beginner' ? ['cidr-to-mask','mask-to-cidr','hosts-to-cidr','usable-hosts'] :
-    difficulty === 'intermediate' ? ['cidr-to-mask','mask-to-cidr','hosts-to-cidr','network-id','broadcast','usable-hosts','wildcard'] :
-    ['cidr-to-mask','mask-to-cidr','hosts-to-cidr','network-id','broadcast','usable-hosts','wildcard','first-last-host'];
-
-  const type = types[randomInt(0, types.length - 1)];
-  const cidrRange = difficulty === 'beginner' ? [8,16,24] : difficulty === 'intermediate' ? [8,12,16,20,24,26,27,28] : Array.from({length:25}, (_,i)=>i+8);
-  const cidr = cidrRange[randomInt(0, cidrRange.length - 1)];
-  const mask = cidrToMask(cidr);
-  const wildcard = cidrToWildcard(cidr);
-  const usable = cidr >= 31 ? (cidr === 32 ? 1 : 2) : Math.pow(2, 32 - cidr) - 2;
-  const randomIp = `${randomInt(10,220)}.${randomInt(0,255)}.${randomInt(0,255)}.${randomInt(1,254)}`;
-
+  const types: TrainingQuestion['type'][] = difficulty === 'beginner' ? ['cidr-to-mask','mask-to-cidr','hosts-to-cidr','usable-hosts'] : difficulty === 'intermediate' ? ['cidr-to-mask','mask-to-cidr','hosts-to-cidr','network-id','broadcast','usable-hosts','wildcard'] : ['cidr-to-mask','mask-to-cidr','hosts-to-cidr','network-id','broadcast','usable-hosts','wildcard','first-last-host'];
+  const type = types[randomInt(0, types.length - 1)]; const cidrRange = difficulty === 'beginner' ? [8,16,24] : difficulty === 'intermediate' ? [8,12,16,20,24,26,27,28] : Array.from({length:25}, (_,i)=>i+8); const cidr = cidrRange[randomInt(0, cidrRange.length - 1)]; const mask = cidrToMask(cidr); const wildcard = cidrToWildcard(cidr); const usable = cidr >= 31 ? (cidr === 32 ? 1 : 2) : Math.pow(2, 32 - cidr) - 2; const randomIp = `${randomInt(10,220)}.${randomInt(0,255)}.${randomInt(0,255)}.${randomInt(1,254)}`;
   let question = '', correctAnswer = '', explanation = '', optionType = '';
-
-  switch (type) {
-    case 'cidr-to-mask': question = `What is the subnet mask for /${cidr}?`; correctAnswer = mask; explanation = `/${cidr} means ${cidr} network bits. Mask = ${mask}.`; optionType = 'mask'; break;
-    case 'mask-to-cidr': question = `What CIDR prefix matches mask ${mask}?`; correctAnswer = `/${cidr}`; explanation = `${mask} has ${cidr} consecutive 1-bits → /${cidr}.`; optionType = 'cidr'; break;
-    case 'hosts-to-cidr': question = `You need ${usable.toLocaleString()} usable hosts. Tightest CIDR?`; correctAnswer = `/${cidr}`; explanation = `/${cidr} → 2^${32-cidr} - 2 = ${usable.toLocaleString()} usable hosts.`; optionType = 'cidr'; break;
-    case 'usable-hosts': question = `How many usable hosts in a /${cidr} subnet?`; correctAnswer = usable.toLocaleString(); explanation = `${32-cidr} host bits → 2^${32-cidr} - 2 = ${usable.toLocaleString()}.`; optionType = 'number'; break;
-    case 'wildcard': question = `Wildcard mask for /${cidr}?`; correctAnswer = wildcard; explanation = `Inverse of ${mask} = ${wildcard}.`; optionType = 'wildcard'; break;
-    case 'network-id': { try { const r = calculateIPv4(randomIp, cidr); question = `Network address for ${randomIp}/${cidr}?`; correctAnswer = r.network; explanation = `AND ${randomIp} with ${mask} → ${r.network}.`; optionType = 'ip'; } catch { return generateQuestion(difficulty); } break; }
-    case 'broadcast': { try { const r = calculateIPv4(randomIp, cidr); question = `Broadcast for ${randomIp}/${cidr}?`; correctAnswer = r.broadcast; explanation = `Set host bits to 1 in ${r.network}/${cidr} → ${r.broadcast}.`; optionType = 'ip'; } catch { return generateQuestion(difficulty); } break; }
-    case 'first-last-host': { try { const r = calculateIPv4(randomIp, cidr); question = `First usable host for ${randomIp}/${cidr}?`; correctAnswer = r.firstHost; explanation = `Network + 1 = ${r.firstHost}.`; optionType = 'ip'; } catch { return generateQuestion(difficulty); } break; }
-  }
-
+  switch (type) { case 'cidr-to-mask': question = `What is the subnet mask for /${cidr}?`; correctAnswer = mask; explanation = `/${cidr} means ${cidr} network bits. Mask = ${mask}.`; optionType = 'mask'; break; case 'mask-to-cidr': question = `What CIDR prefix matches mask ${mask}?`; correctAnswer = `/${cidr}`; explanation = `${mask} has ${cidr} consecutive 1-bits → /${cidr}.`; optionType = 'cidr'; break; case 'hosts-to-cidr': question = `You need ${usable.toLocaleString()} usable hosts. Tightest CIDR?`; correctAnswer = `/${cidr}`; explanation = `/${cidr} → 2^${32-cidr} - 2 = ${usable.toLocaleString()} usable hosts.`; optionType = 'cidr'; break; case 'usable-hosts': question = `How many usable hosts in a /${cidr} subnet?`; correctAnswer = usable.toLocaleString(); explanation = `${32-cidr} host bits → 2^${32-cidr} - 2 = ${usable.toLocaleString()}.`; optionType = 'number'; break; case 'wildcard': question = `Wildcard mask for /${cidr}?`; correctAnswer = wildcard; explanation = `Inverse of ${mask} = ${wildcard}.`; optionType = 'wildcard'; break; case 'network-id': { try { const r = calculateIPv4(randomIp, cidr); question = `Network address for ${randomIp}/${cidr}?`; correctAnswer = r.network; explanation = `AND ${randomIp} with ${mask} → ${r.network}.`; optionType = 'ip'; } catch { return generateQuestion(difficulty); } break; } case 'broadcast': { try { const r = calculateIPv4(randomIp, cidr); question = `Broadcast for ${randomIp}/${cidr}?`; correctAnswer = r.broadcast; explanation = `Set host bits to 1 in ${r.network}/${cidr} → ${r.broadcast}.`; optionType = 'ip'; } catch { return generateQuestion(difficulty); } break; } case 'first-last-host': { try { const r = calculateIPv4(randomIp, cidr); question = `First usable host for ${randomIp}/${cidr}?`; correctAnswer = r.firstHost; explanation = `Network + 1 = ${r.firstHost}.`; optionType = 'ip'; } catch { return generateQuestion(difficulty); } break; } }
   return { id: makeId('q'), type, question, correctAnswer, options: shuffle([correctAnswer, ...generateDistractors(correctAnswer, optionType)]), explanation, difficulty };
 }
 
@@ -232,6 +178,10 @@ export const useSubnetStore = create<SubnetState>((set, get) => ({
       set({ vlsmResults: results, vlsmTotalSpace: totalSpace, vlsmUsedSpace: usedSpace, error: '' });
     } catch (err) { set({ error: err instanceof Error ? err.message : 'Unable to calculate VLSM.' }); }
   },
+  
+  // <--- ADDED: Resets the entire VLSM state completely
+  clearVlsm: () => set({ vlsmRequests: [], vlsmResults: [], vlsmTotalSpace: 0, vlsmUsedSpace: 0, error: '' }),
+
   setTrainingDifficulty: (d) => set({ trainingDifficulty: d }),
   setQuestionCount: (n) => set({ questionCount: n }),
   startTrainingSession: () => {

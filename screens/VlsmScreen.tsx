@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
-import Svg, { Path, Circle, G } from 'react-native-svg';
+import Svg, { Path, Circle } from 'react-native-svg';
 import { useSubnetStore, type VlsmResult } from '../store/useSubnetStore';
 
 const { width: SW } = Dimensions.get('window');
@@ -69,10 +69,10 @@ function VlsmPieChart({ results, totalSpace }: { results: VlsmResult[]; totalSpa
           })}
           <Circle cx={cx} cy={cy} r={innerR} fill="#020408" />
         </Svg>
-        {/* Center label as RN Views (not SVG Text) */}
+        {/* Center label as RN Views showing absolute hosts */}
         <View style={[pie.centerLabel, { width: innerR * 2, height: innerR * 2 }]}>
           <Text style={pie.centerCount}>{results.length} subnets</Text>
-          <Text style={pie.centerFree}>{freePct.toFixed(1)}% free</Text>
+          <Text style={pie.centerFree}>{freeSpace.toLocaleString()} free</Text>
         </View>
       </View>
 
@@ -101,14 +101,59 @@ function VlsmPieChart({ results, totalSpace }: { results: VlsmResult[]; totalSpa
 const pie = StyleSheet.create({
   container: { alignItems: 'center', gap: 14 },
   centerLabel: { position: 'absolute', alignItems: 'center', justifyContent: 'center' },
-  centerCount: { color: '#ffffff', fontSize: 15, fontWeight: '900' },
-  centerFree: { color: 'rgba(255,255,255,0.45)', fontSize: 12, fontWeight: '700' },
+  centerCount: { color: '#ffffff', fontSize: 14, fontWeight: '900' },
+  centerFree: { color: '#5ac8fa', fontSize: 13, fontWeight: '800', marginTop: 2 },
   legend: { width: '100%', gap: 6 },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   legendDot: { width: 12, height: 12, borderRadius: 4 },
   legendLabel: { flex: 1, color: 'rgba(255,255,255,0.7)', fontSize: 13, fontWeight: '700' },
   legendPct: { color: 'rgba(255,255,255,0.5)', fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] },
 });
+
+/* ── Free Space Splitting Suggestions ── */
+function FreeSpaceAnalysis({ freeSpace }: { freeSpace: number }) {
+  if (freeSpace <= 0) return null;
+
+  const blocks: { cidr: number; hosts: number }[] = [];
+  let remaining = freeSpace;
+  for (let cidr = 0; cidr <= 32; cidr++) {
+    const blockSize = Math.pow(2, 32 - cidr);
+    while (remaining >= blockSize) {
+      blocks.push({ cidr, hosts: blockSize });
+      remaining -= blockSize;
+    }
+  }
+
+  const grouped: Record<number, { count: number; hosts: number }> = {};
+  blocks.forEach(b => {
+     if (!grouped[b.cidr]) grouped[b.cidr] = { count: 0, hosts: b.hosts };
+     grouped[b.cidr].count++;
+  });
+
+  return (
+    <View style={s.card}>
+      <Text style={s.cardTitle}>Available Capacity</Text>
+      <Text style={s.capacityDesc}>
+        You have {freeSpace.toLocaleString()} unused addresses. This remaining space cleanly divides into the following available subnets:
+      </Text>
+      <View style={s.capacityList}>
+        {Object.keys(grouped).map(cidrStr => {
+          const cidr = Number(cidrStr);
+          const item = grouped[cidr];
+          return (
+            <View key={cidr} style={s.capacityRow}>
+              <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+                <View style={s.capacityBadge}><Text style={s.capacityBadgeText}>{item.count}x</Text></View>
+                <Text style={s.capacityCidr}>/{cidr} Subnet{item.count > 1 ? 's' : ''}</Text>
+              </View>
+              <Text style={s.capacityHosts}>{item.hosts.toLocaleString()} addrs</Text>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
 
 /* ── Utilization Bar ── */
 function UtilizationBar({ results, totalSpace }: { results: VlsmResult[]; totalSpace: number }) {
@@ -192,9 +237,10 @@ const rc = StyleSheet.create({
 export default function VlsmScreen() {
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
+  
   const {
-    vlsmBaseInput, vlsmRequests, vlsmResults, vlsmTotalSpace, error,
-    setVlsmBaseInput, addVlsmRequest, updateVlsmRequest, removeVlsmRequest, calculateVlsmLayout,
+    vlsmBaseInput, vlsmRequests, vlsmResults, vlsmTotalSpace, vlsmUsedSpace, error,
+    setVlsmBaseInput, addVlsmRequest, updateVlsmRequest, removeVlsmRequest, calculateVlsmLayout, clearVlsm
   } = useSubnetStore();
 
   useEffect(() => {
@@ -204,7 +250,15 @@ export default function VlsmScreen() {
     return () => sub.remove();
   }, []);
 
+  // Calculate live available hosts for the header metrics
   const totalRequestedHosts = useMemo(() => vlsmRequests.reduce((sum, item) => sum + (parseInt(item.hosts || '0', 10) || 0), 0), [vlsmRequests]);
+  
+  const hostsAvailableLive = useMemo(() => {
+    const baseCidrRaw = vlsmBaseInput.split('/')[1];
+    const baseCidr = parseInt(baseCidrRaw || '24', 10);
+    const totalPossibleHosts = Math.pow(2, 32 - (isNaN(baseCidr) ? 24 : baseCidr));
+    return Math.max(0, totalPossibleHosts - totalRequestedHosts);
+  }, [vlsmBaseInput, totalRequestedHosts]);
 
   const handleShareCSV = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -232,15 +286,15 @@ export default function VlsmScreen() {
         {/* Base network */}
         <View style={s.card}>
           <Text style={s.cardLabel}>MAJOR NETWORK</Text>
-          <View style={s.inputShell}>
+          <View style={[s.inputShell, error ? { borderColor: '#ff453a', borderWidth: 1.5 } : null]}>
             <TextInput value={vlsmBaseInput} onChangeText={setVlsmBaseInput}
               placeholder="192.168.10.0/24" placeholderTextColor="rgba(255,255,255,0.2)"
               autoCapitalize="none" autoCorrect={false} keyboardType="numbers-and-punctuation"
-              style={s.input} selectionColor="#5ac8fa" />
+              style={[s.input, error ? { color: '#ff453a' } : null]} selectionColor="#5ac8fa" />
           </View>
           <View style={s.statsRow}>
-            <View style={s.statBox}><Text style={s.statLabel}>HOSTS REQUESTED</Text><Text style={s.statValue}>{totalRequestedHosts.toLocaleString()}</Text></View>
-            <View style={s.statBox}><Text style={s.statLabel}>SUBNETS</Text><Text style={s.statValue}>{vlsmRequests.length}</Text></View>
+            <View style={s.statBox}><Text style={s.statLabel}>REQUESTED</Text><Text style={s.statValue}>{totalRequestedHosts.toLocaleString()}</Text></View>
+            <View style={s.statBox}><Text style={s.statLabel}>REMAINING HOSTS</Text><Text style={s.statValue}>{hostsAvailableLive.toLocaleString()}</Text></View>
           </View>
         </View>
 
@@ -257,10 +311,21 @@ export default function VlsmScreen() {
               <View key={item.id} style={[s.requestRow, { borderLeftColor: item.color, borderLeftWidth: 3 }]}>
                 <View style={s.requestLeft}>
                   <View style={[s.colorDot, { backgroundColor: item.color }]} />
-                  <TextInput value={item.label} onChangeText={(t) => updateVlsmRequest(item.id, { label: t })}
-                    placeholder="Name" placeholderTextColor="rgba(255,255,255,0.2)" style={s.nameInput} />
-                  <TextInput value={item.hosts} onChangeText={(t) => updateVlsmRequest(item.id, { hosts: t.replace(/[^\d]/g, '') })}
-                    placeholder="Hosts" placeholderTextColor="rgba(255,255,255,0.2)" keyboardType="number-pad" style={s.hostsInput} />
+                  
+                  {/* Name Input with Edit Icon */}
+                  <View style={s.nameWrapper}>
+                    <TextInput value={item.label} onChangeText={(t) => updateVlsmRequest(item.id, { label: t })}
+                      placeholder="Name" placeholderTextColor="rgba(255,255,255,0.2)" style={s.nameInput} />
+                    <Ionicons name="pencil" size={12} color="rgba(90,200,250,0.5)" style={s.editIcon} />
+                  </View>
+                  
+                  {/* Hosts Input with Edit Icon */}
+                  <View style={s.hostsWrapper}>
+                    <TextInput value={item.hosts} onChangeText={(t) => updateVlsmRequest(item.id, { hosts: t.replace(/[^\d]/g, '') })}
+                      placeholder="Hosts" placeholderTextColor="rgba(255,255,255,0.2)" keyboardType="number-pad" style={s.hostsInput} />
+                    <Ionicons name="pencil" size={12} color="rgba(90,200,250,0.5)" style={s.editIcon} />
+                  </View>
+                  
                 </View>
                 <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); removeVlsmRequest(item.id); }} style={s.removeBtn}>
                   <Ionicons name="close" size={16} color="#ff7b80" />
@@ -268,11 +333,20 @@ export default function VlsmScreen() {
               </View>
             ))}
           </View>
-          <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); calculateVlsmLayout(); }} style={s.generateBtn}>
-            <LinearGradient colors={['#5ac8fa', '#3aa8e0']} style={s.generateGrad}>
-              <Ionicons name="flash" size={18} color="#020408" /><Text style={s.generateText}>Generate Layout</Text>
-            </LinearGradient>
-          </Pressable>
+
+          {/* Action Row */}
+          <View style={s.actionRow}>
+            <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); calculateVlsmLayout(); }} style={s.generateBtn}>
+              <LinearGradient colors={['#5ac8fa', '#3aa8e0']} style={s.generateGrad}>
+                <Ionicons name="flash" size={18} color="#020408" /><Text style={s.generateText}>Generate Layout</Text>
+              </LinearGradient>
+            </Pressable>
+            
+            <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid); clearVlsm(); }} style={s.clearBtn}>
+              <Ionicons name="trash-outline" size={20} color="#ff7b80" />
+            </Pressable>
+          </View>
+
           {error ? <Text style={s.error}>{error}</Text> : null}
         </View>
 
@@ -284,6 +358,8 @@ export default function VlsmScreen() {
               <VlsmPieChart results={vlsmResults} totalSpace={vlsmTotalSpace} />
               <UtilizationBar results={vlsmResults} totalSpace={vlsmTotalSpace} />
             </View>
+
+            <FreeSpaceAnalysis freeSpace={vlsmTotalSpace - vlsmUsedSpace} />
 
             <View style={s.card}>
               <View style={s.cardHeader}>
@@ -345,13 +421,25 @@ const s = StyleSheet.create({
   requestRow: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(255,255,255,0.025)', borderRadius: 16, paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)' },
   requestLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
   colorDot: { width: 10, height: 10, borderRadius: 5 },
-  nameInput: { flex: 1.2, backgroundColor: 'rgba(6,10,20,0.9)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: 15, fontWeight: '700', paddingHorizontal: 12, paddingVertical: 10 },
-  hostsInput: { width: 70, backgroundColor: 'rgba(6,10,20,0.9)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: 15, fontWeight: '700', paddingHorizontal: 12, paddingVertical: 10, textAlign: 'center' },
+  nameWrapper: { flex: 1.2, justifyContent: 'center' },
+  hostsWrapper: { width: 80, justifyContent: 'center' },
+  nameInput: { backgroundColor: 'rgba(6,10,20,0.9)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: 15, fontWeight: '700', paddingLeft: 12, paddingRight: 28, paddingVertical: 10 },
+  hostsInput: { backgroundColor: 'rgba(6,10,20,0.9)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: 15, fontWeight: '700', paddingLeft: 8, paddingRight: 28, paddingVertical: 10, textAlign: 'center' },
+  editIcon: { position: 'absolute', right: 10 },
   removeBtn: { width: 34, height: 34, borderRadius: 12, backgroundColor: 'rgba(255,90,95,0.08)', borderWidth: 1, borderColor: 'rgba(255,90,95,0.15)', alignItems: 'center', justifyContent: 'center' },
-  generateBtn: { borderRadius: 18, overflow: 'hidden' },
+  actionRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  generateBtn: { flex: 1, borderRadius: 18, overflow: 'hidden' },
   generateGrad: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 16 },
   generateText: { color: '#020408', fontSize: 17, fontWeight: '900' },
-  error: { color: '#ff7b80', fontSize: 13, fontWeight: '600', textAlign: 'center' },
+  clearBtn: { width: 52, borderRadius: 18, backgroundColor: 'rgba(255,123,128,0.1)', borderWidth: 1, borderColor: 'rgba(255,123,128,0.2)', alignItems: 'center', justifyContent: 'center' },
+  capacityDesc: { color: 'rgba(255,255,255,0.5)', fontSize: 13, lineHeight: 18, marginBottom: 8 },
+  capacityList: { gap: 6 },
+  capacityRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.03)', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
+  capacityBadge: { backgroundColor: 'rgba(90,200,250,0.15)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  capacityBadgeText: { color: '#5ac8fa', fontSize: 11, fontWeight: '800' },
+  capacityCidr: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  capacityHosts: { color: 'rgba(255,255,255,0.4)', fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  error: { color: '#ff453a', fontSize: 13, fontWeight: '800', textAlign: 'center' },
   readyPill: { backgroundColor: 'rgba(90,200,250,0.1)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5 },
   readyText: { color: '#5ac8fa', fontSize: 12, fontWeight: '800' },
   resultsList: { gap: 10 },

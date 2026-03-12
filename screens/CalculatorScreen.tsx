@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
+import Slider from '@react-native-community/slider';
 import { useSubnetStore } from '../store/useSubnetStore';
 
 const { width: SW } = Dimensions.get('window');
@@ -50,31 +51,54 @@ const tgl = StyleSheet.create({
 
 /* ── IP Input ── */
 function IpInput() {
-  const { input, result, ipVersion, setInput } = useSubnetStore();
+  const { input, result, ipVersion, setInput, error } = useSubnetStore();
   const ipOnly = input.includes('/') ? input.split('/')[0] : input;
+
   const handleChange = (text: string) => {
     const cleaned = text.trim();
     if (cleaned.includes('/')) { setInput(cleaned); return; }
     if (!cleaned) { setInput(`/${result.cidr}`); return; }
     setInput(`${cleaned}/${result.cidr}`);
   };
+
+  const handleClear = () => {
+    Haptics.selectionAsync();
+    handleChange('');
+  };
+
   return (
     <View style={inp.container}>
       <View style={inp.labelRow}>
         <Text style={inp.label}>{ipVersion === 'ipv4' ? 'IP ADDRESS' : 'IPv6 ADDRESS'}</Text>
         <View style={inp.vBadge}><Text style={inp.vBadgeText}>{ipVersion.toUpperCase()}</Text></View>
       </View>
-      <View style={inp.shell}>
-        <TextInput value={ipOnly} onChangeText={handleChange}
+      
+      {/* Input Shell with Dynamic Error Border */}
+      <View style={[inp.shell, error ? { borderColor: '#ff453a', borderWidth: 1.5 } : null]}>
+        <TextInput 
+          value={ipOnly} 
+          onChangeText={handleChange}
           placeholder={ipVersion === 'ipv4' ? '192.168.1.50' : '2001:db8::1'}
-          placeholderTextColor="rgba(90,200,250,0.2)" autoCapitalize="none" autoCorrect={false}
+          placeholderTextColor="rgba(90,200,250,0.2)" 
+          autoCapitalize="none" 
+          autoCorrect={false}
           keyboardType={ipVersion === 'ipv4' ? 'numbers-and-punctuation' : 'default'}
-          style={inp.input} returnKeyType="done" selectionColor="#5ac8fa" />
+          style={[inp.input, error ? { color: '#ff453a' } : null]} 
+          returnKeyType="done" 
+          selectionColor="#5ac8fa" 
+        />
+        {ipOnly.length > 0 && (
+          <Pressable onPress={handleClear} style={inp.clearBtn} hitSlop={10}>
+            <Ionicons name="close-circle" size={20} color={error ? "rgba(255,69,58,0.5)" : "rgba(90,200,250,0.3)"} />
+          </Pressable>
+        )}
       </View>
+      {!!error && <Text style={inp.errorText}>Invalid IP Format</Text>}
+
       <View style={inp.scopeRow}>
-        <View style={[inp.scopeDot, { backgroundColor: result.scopeColor }]} />
-        <Text style={inp.scopeText}>{result.ipClass} · {result.ipScope}</Text>
-        <View style={inp.meaningPill}><Text style={inp.meaningText}>{result.subnetMeaning}</Text></View>
+        <View style={[inp.scopeDot, { backgroundColor: error ? '#ff453a' : result.scopeColor }]} />
+        <Text style={inp.scopeText}>{error ? 'UNKNOWN' : `${result.ipClass} · ${result.ipScope}`}</Text>
+        <View style={inp.meaningPill}><Text style={inp.meaningText}>{error ? 'N/A' : result.subnetMeaning}</Text></View>
       </View>
     </View>
   );
@@ -85,8 +109,10 @@ const inp = StyleSheet.create({
   label: { color: 'rgba(90,200,250,0.6)', fontSize: 10, fontWeight: '800', letterSpacing: 2 },
   vBadge: { backgroundColor: 'rgba(90,200,250,0.08)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   vBadgeText: { color: 'rgba(90,200,250,0.5)', fontSize: 9, fontWeight: '800', letterSpacing: 1 },
-  shell: { backgroundColor: 'rgba(2,8,20,0.9)', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(90,200,250,0.18)' },
-  input: { color: '#fff', fontSize: 22, fontWeight: '800', fontVariant: ['tabular-nums'], paddingHorizontal: 16, paddingVertical: 14, letterSpacing: 0.5 },
+  shell: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(2,8,20,0.9)', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(90,200,250,0.18)' },
+  input: { flex: 1, color: '#fff', fontSize: 22, fontWeight: '800', fontVariant: ['tabular-nums'], paddingHorizontal: 16, paddingVertical: 14, letterSpacing: 0.5 },
+  clearBtn: { paddingRight: 16, justifyContent: 'center', alignItems: 'center' },
+  errorText: { color: '#ff453a', fontSize: 11, fontWeight: '800', letterSpacing: 1, paddingLeft: 8, marginTop: -2 },
   scopeRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   scopeDot: { width: 8, height: 8, borderRadius: 4 },
   scopeText: { color: 'rgba(255,255,255,0.6)', fontSize: 13, fontWeight: '700' },
@@ -99,6 +125,19 @@ function CompactCidrSlider() {
   const { result, setCidr, ipVersion } = useSubnetStore();
   const max = ipVersion === 'ipv6' ? 128 : 32;
   const quickSelects = ipVersion === 'ipv6' ? [48, 56, 64, 112, 128] : [8, 16, 24, 27, 30];
+  
+  // Track the last value to prevent chainsaw-haptics
+  const lastCidr = useRef(result.cidr);
+
+  const handleSlide = (val: number) => {
+    const intVal = Math.round(val);
+    if (intVal !== lastCidr.current) {
+      Haptics.selectionAsync();
+      lastCidr.current = intVal;
+      setCidr(intVal);
+    }
+  };
+
   return (
     <View style={csl.container}>
       <View style={csl.headerRow}>
@@ -107,6 +146,7 @@ function CompactCidrSlider() {
           <Text style={csl.cidrSlash}>/</Text><Text style={csl.cidrValue}>{result.cidr}</Text>
         </View>
       </View>
+      
       <View style={csl.chipRow}>
         {quickSelects.map((v) => (
           <Pressable key={v} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setCidr(v); }}
@@ -115,18 +155,37 @@ function CompactCidrSlider() {
           </Pressable>
         ))}
       </View>
+
       <View style={csl.stepperRow}>
-        <Pressable onPress={() => { Haptics.selectionAsync(); if (result.cidr > 0) setCidr(result.cidr - 1); }} style={csl.stepBtn}>
+        <Pressable 
+          onPress={() => { Haptics.selectionAsync(); if (result.cidr > 0) setCidr(result.cidr - 1); }} 
+          style={({ pressed }) => [csl.stepBtn, pressed && { transform: [{ scale: 0.85 }], opacity: 0.8 }]}
+        >
           <Ionicons name="remove" size={20} color="#5ac8fa" />
         </Pressable>
+        
         <View style={csl.sliderTrack}>
-          <View style={[csl.sliderFill, { width: `${(result.cidr / max) * 100}%` }]} />
-          <Text style={csl.sliderLabel}>{result.cidr} / {max}</Text>
+          <Slider
+            style={{ flex: 1, height: 40 }}
+            minimumValue={0}
+            maximumValue={max}
+            step={1} // Force whole numbers
+            value={result.cidr}
+            onValueChange={handleSlide} // <--- Added Haptic logic here
+            minimumTrackTintColor="#5ac8fa"
+            maximumTrackTintColor="rgba(255,255,255,0.15)"
+            thumbTintColor="#ffffff"
+          />
         </View>
-        <Pressable onPress={() => { Haptics.selectionAsync(); if (result.cidr < max) setCidr(result.cidr + 1); }} style={csl.stepBtn}>
+
+        <Pressable 
+          onPress={() => { Haptics.selectionAsync(); if (result.cidr < max) setCidr(result.cidr + 1); }} 
+          style={({ pressed }) => [csl.stepBtn, pressed && { transform: [{ scale: 0.85 }], opacity: 0.8 }]}
+        >
           <Ionicons name="add" size={20} color="#5ac8fa" />
         </Pressable>
       </View>
+
       <View style={csl.bitRow}>
         <View style={csl.bitPill}><Text style={csl.bitLabel}>NETWORK</Text><Text style={csl.bitValue}>{result.cidr} bits</Text></View>
         <View style={csl.bitPill}><Text style={csl.bitLabel}>HOST</Text><Text style={csl.bitValue}>{(ipVersion === 'ipv6' ? 128 : 32) - result.cidr} bits</Text></View>
@@ -147,17 +206,15 @@ const csl = StyleSheet.create({
   chipText: { color: 'rgba(255,255,255,0.45)', fontSize: 13, fontWeight: '800' },
   chipTextActive: { color: '#5ac8fa' },
   stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  stepBtn: { width: 40, height: 40, borderRadius: 14, backgroundColor: 'rgba(90,200,250,0.1)', borderWidth: 1, borderColor: 'rgba(90,200,250,0.2)', alignItems: 'center', justifyContent: 'center' },
-  sliderTrack: { flex: 1, height: 36, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', overflow: 'hidden', justifyContent: 'center' },
-  sliderFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: 'rgba(90,200,250,0.12)', borderRadius: 12 },
-  sliderLabel: { color: '#fff', fontSize: 14, fontWeight: '800', textAlign: 'center', fontVariant: ['tabular-nums'] },
+  stepBtn: { width: 44, height: 44, borderRadius: 14, backgroundColor: 'rgba(90,200,250,0.1)', borderWidth: 1, borderColor: 'rgba(90,200,250,0.2)', alignItems: 'center', justifyContent: 'center' },
+  sliderTrack: { flex: 1, height: 44, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.03)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', justifyContent: 'center', paddingHorizontal: 8 },
   bitRow: { flexDirection: 'row', gap: 8 },
   bitPill: { flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
   bitLabel: { color: 'rgba(255,255,255,0.35)', fontSize: 9, fontWeight: '800', letterSpacing: 1 },
   bitValue: { color: '#fff', fontSize: 13, fontWeight: '800' },
 });
 
-/* ── Result Tiles ── */
+/* ── Result Tiles & Advanced Diagnostics Remain Unchanged ── */
 function CopyTile({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
     <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); Clipboard.setStringAsync(value); }}
@@ -202,7 +259,6 @@ const rt = StyleSheet.create({
   tileValueAccent: { color: '#5ac8fa' },
 });
 
-/* ── Advanced Diagnostics ── */
 function BinaryAnalysis() {
   const { result } = useSubnetStore();
   if (result.version !== 'ipv4') return null;
@@ -322,7 +378,6 @@ const adv = StyleSheet.create({
   infoValue: { color: '#5ac8fa', fontSize: 13, fontWeight: '900' },
 });
 
-/* ── Main Screen ── */
 export default function CalculatorScreen() {
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);

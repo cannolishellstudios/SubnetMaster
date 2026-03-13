@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Purchases from 'react-native-purchases';
+import { Platform } from 'react-native';
 import {
   calculateSubnet,
   calculateVlsm,
@@ -49,8 +51,13 @@ type SubnetState = {
   selectedAnswer: string|null; showExplanation: boolean;
   sessionQuestions: TrainingQuestion[]; sessionCorrect: number; sessionWrong: number;
   sessionStartTime: number; sessionActive: boolean; trainingSessions: TrainingSession[];
+  
+  // RevenueCat State & Actions
   isPremium: boolean;
   setIsPremium: (v: boolean) => void;
+  initRevenueCat: () => Promise<void>;
+  checkProStatus: () => Promise<void>;
+
   setIpVersion: (v: IPVersion) => void; setInput: (value: string) => void;
   setCidr: (value: number) => void; recalculate: (value?: string) => void;
   toggleFavorite: (id: string) => void; clearHistory: () => void;
@@ -125,9 +132,34 @@ export const useSubnetStore = create<SubnetState>()(
       trainingDifficulty: 'beginner', questionCount: 10,
       currentQuestion: null, currentQuestionIndex: 0, selectedAnswer: null, showExplanation: false,
       sessionQuestions: [], sessionCorrect: 0, sessionWrong: 0, sessionStartTime: 0,
-      sessionActive: false, trainingSessions: [], isPremium: false,
-
+      sessionActive: false, trainingSessions: [], 
+      
+      // REVENUECAT INIT & CHECK
+      isPremium: false,
       setIsPremium: (v) => set({ isPremium: v }),
+      initRevenueCat: async () => {
+        // NOTE: Replace these placeholder API keys with your actual keys from RevenueCat
+        const API_KEY = Platform.select({
+          ios: 'appl_YOUR_IOS_API_KEY_HERE',
+          android: 'goog_YOUR_ANDROID_API_KEY_HERE', // <-- Paste your exact RevenueCat key here!
+        });
+        
+        if (API_KEY) {
+          Purchases.configure({ apiKey: API_KEY });
+          await get().checkProStatus();
+        }
+      },
+      checkProStatus: async () => {
+        try {
+          const customerInfo = await Purchases.getCustomerInfo();
+          // Ensure you create an entitlement named 'pro' in the RevenueCat dashboard
+          const isPro = typeof customerInfo.entitlements.active['pro'] !== 'undefined';
+          set({ isPremium: isPro });
+        } catch (e) {
+          console.log('RevenueCat Check Error:', e);
+        }
+      },
+      
       setIpVersion: (v) => {
         const cur=get();
         if(v==='ipv6'&&cur.ipVersion!=='ipv6'){set({ipVersion:v,input:'2001:db8::1/64',cidrInput:'64',error:''});get().recalculate('2001:db8::1/64');}

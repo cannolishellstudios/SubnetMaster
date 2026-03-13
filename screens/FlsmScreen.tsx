@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
+import { useNavigation } from '@react-navigation/native';
 import { useSubnetStore, type FlsmResult } from '../store/useSubnetStore';
 
 const { width: SW } = Dimensions.get('window');
@@ -259,7 +260,6 @@ const frc = StyleSheet.create({
 /* ── Block Diagram ── */
 function FlsmBlockDiagram({ results }: { results: FlsmResult[] }) {
   if(results.length===0)return null;
-  const cols = Math.min(results.length, 4);
   return (
     <View style={bd.container}>
       <Text style={bd.title}>Address Block Visualization</Text>
@@ -380,14 +380,18 @@ const xp = StyleSheet.create({
 
 /* ── Main Screen ── */
 export default function FlsmScreen() {
+  const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
   const [showExport, setShowExport] = useState(false);
 
   const {
     flsmBaseInput, flsmSubnetCount, flsmResults, flsmError,
-    calculateFlsm, clearFlsm,
+    calculateFlsm, clearFlsm, isPremium, hasUsedFreeFlsm,
   } = useSubnetStore();
+
+  // Gate: free users get 1 calculation. After that, Pro required.
+  const isGated = !isPremium && hasUsedFreeFlsm;
 
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener('scrollToTop', (tabName: string) => {
@@ -395,6 +399,15 @@ export default function FlsmScreen() {
     });
     return ()=>sub.remove();
   }, []);
+
+  const handleCalculate = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    if (isGated) {
+      navigation.navigate('Paywall');
+      return;
+    }
+    calculateFlsm();
+  };
 
   // Derived info
   const rawIp = flsmBaseInput.includes('/') ? flsmBaseInput.split('/')[0] : flsmBaseInput;
@@ -426,6 +439,18 @@ export default function FlsmScreen() {
           Fixed-Length Subnet Masking splits a network into equal-sized subnets — perfect for uniform deployments.
         </Text>
 
+        {/* Pro gate banner — shown after free calc is used */}
+        {isGated && (
+          <Pressable onPress={()=>navigation.navigate('Paywall')} style={s.gateBanner}>
+            <Ionicons name="lock-closed" size={16} color="#fcc419"/>
+            <View style={{flex:1}}>
+              <Text style={s.gateBannerTitle}>Unlock Unlimited Calculations</Text>
+              <Text style={s.gateBannerSub}>You've used your free FLSM calculation. Upgrade to Pro for unlimited access.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#fcc419"/>
+          </Pressable>
+        )}
+
         {/* Input Card */}
         <View style={s.card}>
           <Text style={s.cardLabel}>NETWORK CONFIGURATION</Text>
@@ -456,10 +481,15 @@ export default function FlsmScreen() {
 
         {/* Generate button */}
         <View style={s.actionRow}>
-          <Pressable onPress={()=>{Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);calculateFlsm();}} style={s.generateBtn}>
-            <LinearGradient colors={['#5ac8fa','#3aa8e0']} style={s.generateGrad}>
-              <Ionicons name="flash" size={18} color="#020408"/>
-              <Text style={s.generateText}>Calculate Equal Subnets</Text>
+          <Pressable onPress={handleCalculate} style={s.generateBtn}>
+            <LinearGradient
+              colors={isGated ? ['rgba(252,196,25,0.2)','rgba(252,196,25,0.1)'] : ['#5ac8fa','#3aa8e0']}
+              style={s.generateGrad}
+            >
+              <Ionicons name={isGated ? 'lock-closed' : 'flash'} size={18} color={isGated ? '#fcc419' : '#020408'}/>
+              <Text style={[s.generateText, isGated && {color:'#fcc419'}]}>
+                {isGated ? 'Pro Required — Upgrade' : 'Calculate Equal Subnets'}
+              </Text>
             </LinearGradient>
           </Pressable>
           {flsmResults.length>0&&(
@@ -498,11 +528,20 @@ export default function FlsmScreen() {
               </View>
             </View>
 
-            <Pressable onPress={()=>{Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);setShowExport(true);}} style={s.exportBtn}>
-              <LinearGradient colors={['rgba(90,200,250,0.15)','rgba(90,200,250,0.08)']} style={s.exportGrad}>
-                <Ionicons name="share-outline" size={20} color="#5ac8fa"/>
-                <Text style={s.exportText}>Export / Share Results</Text>
-                <Ionicons name="chevron-up" size={16} color="rgba(90,200,250,0.5)"/>
+            <Pressable onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              if (!isPremium) { navigation.navigate('Paywall'); return; }
+              setShowExport(true);
+            }} style={s.exportBtn}>
+              <LinearGradient
+                colors={!isPremium ? ['rgba(255,255,255,0.05)','rgba(255,255,255,0.02)'] : ['rgba(90,200,250,0.15)','rgba(90,200,250,0.08)']}
+                style={[s.exportGrad, !isPremium && {borderColor:'rgba(255,255,255,0.1)'}]}
+              >
+                <Ionicons name={isPremium ? 'share-outline' : 'lock-closed'} size={20} color={isPremium ? '#5ac8fa' : 'rgba(255,255,255,0.4)'}/>
+                <Text style={[s.exportText, !isPremium && {color:'rgba(255,255,255,0.4)'}]}>
+                  {isPremium ? 'Export / Share Results' : 'Pro Feature: Export Results'}
+                </Text>
+                {isPremium && <Ionicons name="chevron-up" size={16} color="rgba(90,200,250,0.5)"/>}
               </LinearGradient>
             </Pressable>
           </>
@@ -513,6 +552,12 @@ export default function FlsmScreen() {
             <Ionicons name="layers-outline" size={40} color="rgba(255,255,255,0.15)"/>
             <Text style={s.emptyTitle}>No Results Yet</Text>
             <Text style={s.emptyText}>Configure the base network and number of equal subnets, then tap Calculate.</Text>
+            {!isPremium && !hasUsedFreeFlsm && (
+              <View style={s.freeTrialPill}>
+                <Ionicons name="gift-outline" size={14} color="#51cf66"/>
+                <Text style={s.freeTrialText}>1 free calculation available</Text>
+              </View>
+            )}
           </View>
         )}
       </ScrollView>
@@ -531,6 +576,9 @@ const s = StyleSheet.create({
   pageTitle:{color:'#fff',fontSize:24,fontWeight:'900',letterSpacing:-0.5},
   badge:{width:40,height:40,borderRadius:14,backgroundColor:'rgba(90,200,250,0.1)',borderWidth:1,borderColor:'rgba(90,200,250,0.2)',alignItems:'center',justifyContent:'center'},
   pageDesc:{color:'rgba(255,255,255,0.4)',fontSize:13,lineHeight:20,fontWeight:'600',marginTop:-4},
+  gateBanner:{flexDirection:'row',alignItems:'center',gap:12,backgroundColor:'rgba(252,196,25,0.08)',borderRadius:16,padding:14,borderWidth:1,borderColor:'rgba(252,196,25,0.2)'},
+  gateBannerTitle:{color:'#fcc419',fontSize:13,fontWeight:'800'},
+  gateBannerSub:{color:'rgba(252,196,25,0.7)',fontSize:12,fontWeight:'600',marginTop:2,lineHeight:16},
   card:{backgroundColor:'rgba(10,25,60,0.25)',borderRadius:22,padding:16,borderWidth:1,borderColor:'rgba(255,255,255,0.06)',gap:14},
   cardLabel:{color:'rgba(90,200,250,0.6)',fontSize:10,fontWeight:'800',letterSpacing:2},
   divider:{height:1,backgroundColor:'rgba(90,200,250,0.08)'},
@@ -544,7 +592,7 @@ const s = StyleSheet.create({
   warnText:{color:'#fcc419',fontSize:13,fontWeight:'700',flex:1,lineHeight:18},
   actionRow:{flexDirection:'row',gap:10},
   generateBtn:{flex:1,borderRadius:18,overflow:'hidden'},
-  generateGrad:{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,paddingVertical:16},
+  generateGrad:{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,paddingVertical:16,borderRadius:18,borderWidth:1,borderColor:'transparent'},
   generateText:{color:'#020408',fontSize:17,fontWeight:'900'},
   clearBtn:{width:52,borderRadius:18,backgroundColor:'rgba(255,123,128,0.1)',borderWidth:1,borderColor:'rgba(255,123,128,0.2)',alignItems:'center',justifyContent:'center'},
   errorCard:{flexDirection:'row',alignItems:'center',gap:10,backgroundColor:'rgba(255,69,58,0.08)',borderRadius:14,padding:12,borderWidth:1,borderColor:'rgba(255,69,58,0.2)'},
@@ -557,9 +605,11 @@ const s = StyleSheet.create({
   tapHint:{color:'rgba(255,255,255,0.25)',fontSize:11,fontWeight:'600',marginTop:-8},
   resultList:{gap:10},
   exportBtn:{borderRadius:20,overflow:'hidden'},
-  exportGrad:{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10,paddingVertical:16,borderRadius:20,borderWidth:1,borderColor:'rgba(90,200,250,0.2)'},
-  exportText:{color:'#5ac8fa',fontSize:16,fontWeight:'900',flex:1,textAlign:'center'},
+  exportGrad:{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10,paddingVertical:16,borderRadius:20,borderWidth:1},
+  exportText:{fontSize:16,fontWeight:'900',flex:1,textAlign:'center'},
   empty:{alignItems:'center',gap:8,paddingVertical:48},
   emptyTitle:{color:'rgba(255,255,255,0.5)',fontSize:16,fontWeight:'800'},
   emptyText:{color:'rgba(255,255,255,0.35)',fontSize:13,textAlign:'center',lineHeight:20,maxWidth:'80%'},
+  freeTrialPill:{flexDirection:'row',alignItems:'center',gap:6,backgroundColor:'rgba(81,207,102,0.1)',borderRadius:20,paddingHorizontal:14,paddingVertical:7,borderWidth:1,borderColor:'rgba(81,207,102,0.2)',marginTop:4},
+  freeTrialText:{color:'#51cf66',fontSize:12,fontWeight:'800'},
 });

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -7,12 +7,14 @@ import {
   Pressable,
   Dimensions,
   DeviceEventEmitter,
+  Animated,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import Svg, { Circle } from 'react-native-svg';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useSubnetStore, type TrainingSession } from '../store/useSubnetStore';
 
 const { width: SW } = Dimensions.get('window');
@@ -38,7 +40,8 @@ function ProgressRing({ size, progress, color, children }: { size: number; progr
 
 /* ── Difficulty Selector ── */
 function DifficultySelector() {
-  const { trainingDifficulty, setTrainingDifficulty } = useSubnetStore();
+  const navigation = useNavigation<any>();
+  const { trainingDifficulty, setTrainingDifficulty, isPremium } = useSubnetStore();
   const levels = [
     { key: 'beginner' as const, label: 'Beginner', icon: 'leaf-outline', desc: 'Masks, CIDR basics, usable hosts', color: '#51cf66' },
     { key: 'intermediate' as const, label: 'Intermediate', icon: 'fitness-outline', desc: 'Network IDs, wildcards, broadcast', color: '#fcc419' },
@@ -48,10 +51,17 @@ function DifficultySelector() {
   return (
     <View style={ds.container}>
       {levels.map((lv) => {
-        const active = trainingDifficulty === lv.key;
+        const isLocked = !isPremium && lv.key !== 'beginner';
+        const active = trainingDifficulty === lv.key && !isLocked;
         return (
-          <Pressable key={lv.key} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setTrainingDifficulty(lv.key); }}
-            style={[ds.card, active && { borderColor: lv.color, backgroundColor: `${lv.color}10` }]}>
+          <Pressable key={lv.key} onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              if (isLocked) { navigation.navigate('Paywall'); } else { setTrainingDifficulty(lv.key); }
+            }}
+            style={[ds.card, active && { borderColor: lv.color, backgroundColor: `${lv.color}10` }, isLocked && { opacity: 0.6 }]}>
+            {isLocked && (
+              <Ionicons name="lock-closed" size={12} color="rgba(255,255,255,0.4)" style={{ position: 'absolute', top: 8, right: 8 }} />
+            )}
             <View style={[ds.iconBox, active && { backgroundColor: `${lv.color}20` }]}>
               <Ionicons name={lv.icon as any} size={18} color={active ? lv.color : 'rgba(255,255,255,0.35)'} />
             </View>
@@ -73,18 +83,29 @@ const ds = StyleSheet.create({
 
 /* ── Question Count Selector ── */
 function QuestionCountSelector() {
-  const { questionCount, setQuestionCount } = useSubnetStore();
+  const navigation = useNavigation<any>();
+  const { questionCount, setQuestionCount, isPremium } = useSubnetStore();
   const counts = [10, 25, 50];
+
   return (
     <View style={qcs.container}>
       <Text style={qcs.label}>QUESTIONS PER SESSION</Text>
       <View style={qcs.row}>
-        {counts.map((c) => (
-          <Pressable key={c} onPress={() => { Haptics.selectionAsync(); setQuestionCount(c); }}
-            style={[qcs.btn, questionCount === c && qcs.btnActive]}>
-            <Text style={[qcs.btnText, questionCount === c && qcs.btnTextActive]}>{c}</Text>
-          </Pressable>
-        ))}
+        {counts.map((c) => {
+          const isLocked = !isPremium && c > 10;
+          return (
+            <Pressable key={c} onPress={() => {
+                Haptics.selectionAsync();
+                if (isLocked) { navigation.navigate('Paywall'); } else { setQuestionCount(c); }
+              }}
+              style={[qcs.btn, questionCount === c && !isLocked && qcs.btnActive, isLocked && { opacity: 0.6 }]}>
+              {isLocked && (
+                <Ionicons name="lock-closed" size={10} color="rgba(255,255,255,0.3)" style={{ position: 'absolute', top: 6, right: 8 }} />
+              )}
+              <Text style={[qcs.btnText, questionCount === c && !isLocked && qcs.btnTextActive]}>{c}</Text>
+            </Pressable>
+          );
+        })}
       </View>
     </View>
   );
@@ -99,11 +120,60 @@ const qcs = StyleSheet.create({
   btnTextActive: { color: '#5ac8fa' },
 });
 
+/* ── Pause Overlay ── */
+function PauseOverlay({ onResume }: { onResume: () => void }) {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(fadeAnim, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+  }, []);
+
+  return (
+    <Animated.View style={[po.overlay, { opacity: fadeAnim }]} pointerEvents="box-none">
+      <View style={po.card} pointerEvents="auto">
+        <View style={po.iconWrap}>
+          <Ionicons name="pause-circle" size={52} color="#5ac8fa" />
+        </View>
+        <Text style={po.title}>Session Paused</Text>
+        <Text style={po.sub}>Your progress and timer are saved.{'\n'}Come back anytime to continue.</Text>
+        <Pressable
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy); onResume(); }}
+          style={po.resumeBtn}>
+          <LinearGradient colors={['#5ac8fa', '#3aa8e0']} style={po.resumeGrad}>
+            <Ionicons name="play" size={18} color="#020408" />
+            <Text style={po.resumeText}>Resume Quiz</Text>
+          </LinearGradient>
+        </Pressable>
+      </View>
+    </Animated.View>
+  );
+}
+const po = StyleSheet.create({
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(2,4,8,0.93)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 999,
+    elevation: 999,
+  },
+  card: { alignItems: 'center', gap: 16, paddingHorizontal: 24 },
+  iconWrap: { width: 80, height: 80, borderRadius: 40, backgroundColor: 'rgba(90,200,250,0.1)', borderWidth: 1, borderColor: 'rgba(90,200,250,0.25)', alignItems: 'center', justifyContent: 'center' },
+  title: { color: '#fff', fontSize: 22, fontWeight: '900' },
+  sub: { color: 'rgba(255,255,255,0.45)', fontSize: 14, fontWeight: '600', textAlign: 'center', lineHeight: 22 },
+  resumeBtn: { borderRadius: 18, overflow: 'hidden', marginTop: 4, minWidth: 200 },
+  resumeGrad: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 16, paddingHorizontal: 32 },
+  resumeText: { color: '#020408', fontSize: 17, fontWeight: '900' },
+});
+
 /* ── Quiz View ── */
 function QuizView() {
-  const { currentQuestion, currentQuestionIndex, selectedAnswer, showExplanation,
+  const {
+    currentQuestion, currentQuestionIndex, selectedAnswer, showExplanation,
     sessionCorrect, sessionWrong, sessionQuestions, sessionStartTime,
-    answerQuestion, nextQuestion, endTrainingSession } = useSubnetStore();
+    sessionPaused, pausedTimeAccumMs, pauseStartTime,
+    answerQuestion, nextQuestion, endTrainingSession, resumeTraining,
+  } = useSubnetStore();
   const scrollRef = React.useRef<ScrollView>(null);
 
   if (!currentQuestion) return null;
@@ -112,94 +182,112 @@ function QuizView() {
   const progress = (currentQuestionIndex + 1) / total;
   const isLast = currentQuestionIndex + 1 >= total;
 
-  // Timer
+  // Timer — pauses when sessionPaused, accounts for all accumulated pause time
   const [elapsed, setElapsed] = React.useState(0);
   useEffect(() => {
-    const interval = setInterval(() => setElapsed(Math.floor((Date.now() - sessionStartTime) / 1000)), 1000);
-    return () => clearInterval(interval);
-  }, [sessionStartTime]);
+    const tick = () => {
+      if (sessionPaused) return;
+      const accumulated = pausedTimeAccumMs;
+      setElapsed(Math.max(0, Math.floor((Date.now() - sessionStartTime - accumulated) / 1000)));
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [sessionStartTime, sessionPaused, pausedTimeAccumMs]);
+
   const timeStr = `${Math.floor(elapsed / 60)}:${(elapsed % 60).toString().padStart(2, '0')}`;
 
   // Scroll to top on new question
   useEffect(() => { scrollRef.current?.scrollTo({ y: 0, animated: true }); }, [currentQuestionIndex]);
 
   return (
-    <View style={qz.container}>
-      {/* Timer + progress */}
-      <View style={qz.topBar}>
-        <View style={qz.timerPill}><Ionicons name="timer-outline" size={14} color="#fcc419" /><Text style={qz.timerText}>{timeStr}</Text></View>
-        <View style={qz.progressBar}><View style={[qz.progressFill, { width: `${progress * 100}%` }]} /></View>
-        <Text style={qz.progressText}>{currentQuestionIndex + 1}/{total}</Text>
-      </View>
-
-      {/* Score */}
-      <View style={qz.scoreRow}>
-        <View style={qz.scorePill}><Ionicons name="checkmark-circle" size={14} color="#51cf66" /><Text style={[qz.scoreText, { color: '#51cf66' }]}>{sessionCorrect}</Text></View>
-        <View style={qz.scorePill}><Ionicons name="close-circle" size={14} color="#ff6b6b" /><Text style={[qz.scoreText, { color: '#ff6b6b' }]}>{sessionWrong}</Text></View>
-        <View style={qz.scorePill}><Text style={qz.scoreTextDim}>{total - currentQuestionIndex - 1} left</Text></View>
-      </View>
-
-      {/* Question */}
-      <View style={qz.questionCard}>
-        <View style={qz.questionMeta}>
-          <View style={qz.diffBadge}><Text style={qz.diffText}>{currentQuestion.difficulty.toUpperCase()}</Text></View>
-          <Text style={qz.typeText}>{currentQuestion.type.replace(/-/g, ' ').toUpperCase()}</Text>
+    <View style={qz.wrapper}>
+      <View style={qz.container}>
+        {/* Timer + progress */}
+        <View style={qz.topBar}>
+          <View style={[qz.timerPill, sessionPaused && qz.timerPillPaused]}>
+            <Ionicons name={sessionPaused ? 'pause' : 'timer-outline'} size={14} color={sessionPaused ? 'rgba(255,255,255,0.5)' : '#fcc419'} />
+            <Text style={[qz.timerText, sessionPaused && { color: 'rgba(255,255,255,0.4)' }]}>{timeStr}</Text>
+            {sessionPaused && <Text style={qz.pausedLabel}>PAUSED</Text>}
+          </View>
+          <View style={qz.progressBar}><View style={[qz.progressFill, { width: `${progress * 100}%` }]} /></View>
+          <Text style={qz.progressText}>{currentQuestionIndex + 1}/{total}</Text>
         </View>
-        <Text style={qz.questionText}>{currentQuestion.question}</Text>
-      </View>
 
-      {/* Options */}
-      <View style={qz.options}>
-        {currentQuestion.options.map((opt, i) => {
-          const isSel = selectedAnswer === opt;
-          const isCorrect = opt === currentQuestion.correctAnswer;
-          const showRes = selectedAnswer !== null;
-          let bc = 'rgba(255,255,255,0.08)', bg = 'rgba(255,255,255,0.03)', tc = '#fff';
-          if (showRes && isCorrect) { bc = '#51cf66'; bg = 'rgba(81,207,102,0.12)'; tc = '#51cf66'; }
-          else if (showRes && isSel && !isCorrect) { bc = '#ff6b6b'; bg = 'rgba(255,107,107,0.12)'; tc = '#ff6b6b'; }
-          return (
-            <Pressable key={i} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); answerQuestion(opt); }}
-              disabled={selectedAnswer !== null} style={[qz.option, { borderColor: bc, backgroundColor: bg }]}>
-              <View style={qz.optionLeft}>
-                <View style={[qz.optionLetter, { borderColor: bc }]}><Text style={[qz.optionLetterText, { color: tc }]}>{String.fromCharCode(65 + i)}</Text></View>
-                <Text style={[qz.optionText, { color: tc }]}>{opt}</Text>
-              </View>
-              {showRes && isCorrect && <Ionicons name="checkmark-circle" size={20} color="#51cf66" />}
-              {showRes && isSel && !isCorrect && <Ionicons name="close-circle" size={20} color="#ff6b6b" />}
-            </Pressable>
-          );
-        })}
-      </View>
-
-      {/* Explanation */}
-      {showExplanation && (
-        <View style={qz.explanationBox}>
-          <Ionicons name="bulb-outline" size={16} color="#fcc419" />
-          <Text style={qz.explanationText}>{currentQuestion.explanation}</Text>
+        {/* Score */}
+        <View style={qz.scoreRow}>
+          <View style={qz.scorePill}><Ionicons name="checkmark-circle" size={14} color="#51cf66" /><Text style={[qz.scoreText, { color: '#51cf66' }]}>{sessionCorrect}</Text></View>
+          <View style={qz.scorePill}><Ionicons name="close-circle" size={14} color="#ff6b6b" /><Text style={[qz.scoreText, { color: '#ff6b6b' }]}>{sessionWrong}</Text></View>
+          <View style={qz.scorePill}><Text style={qz.scoreTextDim}>{total - currentQuestionIndex - 1} left</Text></View>
         </View>
-      )}
 
-      {/* Next / Finish */}
-      {selectedAnswer !== null && (
-        <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); isLast ? endTrainingSession() : nextQuestion(); }} style={qz.nextBtn}>
-          <LinearGradient colors={['#5ac8fa', '#3aa8e0']} style={qz.nextGrad}>
-            <Text style={qz.nextText}>{isLast ? 'View Results' : 'Next Question'}</Text>
-            <Ionicons name={isLast ? 'flag' : 'arrow-forward'} size={18} color="#020408" />
-          </LinearGradient>
+        {/* Question */}
+        <View style={qz.questionCard}>
+          <View style={qz.questionMeta}>
+            <View style={qz.diffBadge}><Text style={qz.diffText}>{currentQuestion.difficulty.toUpperCase()}</Text></View>
+            <Text style={qz.typeText}>{currentQuestion.type.replace(/-/g, ' ').toUpperCase()}</Text>
+          </View>
+          <Text style={qz.questionText}>{currentQuestion.question}</Text>
+        </View>
+
+        {/* Options */}
+        <View style={qz.options}>
+          {currentQuestion.options.map((opt, i) => {
+            const isSel = selectedAnswer === opt;
+            const isCorrect = opt === currentQuestion.correctAnswer;
+            const showRes = selectedAnswer !== null;
+            let bc = 'rgba(255,255,255,0.08)', bg = 'rgba(255,255,255,0.03)', tc = '#fff';
+            if (showRes && isCorrect) { bc = '#51cf66'; bg = 'rgba(81,207,102,0.12)'; tc = '#51cf66'; }
+            else if (showRes && isSel && !isCorrect) { bc = '#ff6b6b'; bg = 'rgba(255,107,107,0.12)'; tc = '#ff6b6b'; }
+            return (
+              <Pressable key={i}
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); answerQuestion(opt); }}
+                disabled={selectedAnswer !== null || sessionPaused}
+                style={[qz.option, { borderColor: bc, backgroundColor: bg }]}>
+                <View style={qz.optionLeft}>
+                  <View style={[qz.optionLetter, { borderColor: bc }]}><Text style={[qz.optionLetterText, { color: tc }]}>{String.fromCharCode(65 + i)}</Text></View>
+                  <Text style={[qz.optionText, { color: tc }]}>{opt}</Text>
+                </View>
+                {showRes && isCorrect && <Ionicons name="checkmark-circle" size={20} color="#51cf66" />}
+                {showRes && isSel && !isCorrect && <Ionicons name="close-circle" size={20} color="#ff6b6b" />}
+              </Pressable>
+            );
+          })}
+        </View>
+
+        {/* Explanation */}
+        {showExplanation && (
+          <View style={qz.explanationBox}>
+            <Ionicons name="bulb-outline" size={16} color="#fcc419" />
+            <Text style={qz.explanationText}>{currentQuestion.explanation}</Text>
+          </View>
+        )}
+
+        {/* Next / Finish */}
+        {selectedAnswer !== null && (
+          <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); isLast ? endTrainingSession() : nextQuestion(); }} style={qz.nextBtn}>
+            <LinearGradient colors={['#5ac8fa', '#3aa8e0']} style={qz.nextGrad}>
+              <Text style={qz.nextText}>{isLast ? 'View Results' : 'Next Question'}</Text>
+              <Ionicons name={isLast ? 'flag' : 'arrow-forward'} size={18} color="#020408" />
+            </LinearGradient>
+          </Pressable>
+        )}
+
+        <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); endTrainingSession(); }} style={qz.quitBtn}>
+          <Text style={qz.quitText}>End Session Early</Text>
         </Pressable>
-      )}
-
-      <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); endTrainingSession(); }} style={qz.quitBtn}>
-        <Text style={qz.quitText}>End Session Early</Text>
-      </Pressable>
+      </View>
     </View>
   );
 }
 const qz = StyleSheet.create({
+  wrapper: { position: 'relative', flex: 1 },
   container: { gap: 14 },
   topBar: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   timerPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(252,196,25,0.08)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },
+  timerPillPaused: { backgroundColor: 'rgba(255,255,255,0.05)' },
   timerText: { color: '#fcc419', fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  pausedLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 9, fontWeight: '800', letterSpacing: 1, marginLeft: 2 },
   progressBar: { flex: 1, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.06)', overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: 3, backgroundColor: '#5ac8fa' },
   progressText: { color: 'rgba(255,255,255,0.5)', fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] },
@@ -319,9 +407,13 @@ const so = StyleSheet.create({
 export default function TrainingScreen() {
   const insets = useSafeAreaInsets();
   const scrollRef = React.useRef<ScrollView>(null);
-  const { sessionActive, trainingSessions, startTrainingSession, loadTrainingSessions } = useSubnetStore();
+  const {
+    sessionActive, trainingSessions, startTrainingSession, loadTrainingSessions,
+    pauseTraining, resumeTraining, sessionPaused,
+  } = useSubnetStore();
 
   useEffect(() => { loadTrainingSessions(); }, []);
+
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener('scrollToTop', (tabName: string) => {
       if (tabName === 'Training') scrollRef.current?.scrollTo({ y: 0, animated: true });
@@ -329,15 +421,33 @@ export default function TrainingScreen() {
     return () => sub.remove();
   }, []);
 
+  const sessionActiveRef = useRef(sessionActive);
+  useEffect(() => { sessionActiveRef.current = sessionActive; }, [sessionActive]);
+
+  // useFocusEffect cleanup calls getState() directly — no closures, no deps,
+  // no risk of re-registering when sessionPaused flips after Resume is tapped.
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        const { sessionActive: active, pauseTraining } = useSubnetStore.getState();
+        if (active) pauseTraining();
+      };
+    }, [])
+  );
+
   return (
     <View style={ms.container}>
       <LinearGradient colors={['#030810', '#06101f', '#040812', '#020408']} locations={[0, 0.3, 0.7, 1]} style={StyleSheet.absoluteFillObject} />
       <ScrollView ref={scrollRef} style={ms.scroll}
         contentContainerStyle={[ms.content, { paddingTop: Math.max(insets.top + 8, 28), paddingBottom: 120 + Math.max(insets.bottom, 16) }]}
-        showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"
+        scrollEnabled={!sessionPaused}>
+
         <View style={ms.headerRow}>
           <View><Text style={ms.eyebrow}>PRACTICE</Text><Text style={ms.pageTitle}>CIDR Training</Text></View>
-          <View style={ms.badgePill}><Ionicons name="school" size={18} color="#5ac8fa" /></View>
+          <View style={[ms.badgePill, sessionActive && sessionPaused && ms.badgePillPaused]}>
+            <Ionicons name={sessionActive ? (sessionPaused ? 'pause' : 'school') : 'school'} size={18} color={sessionActive && sessionPaused ? '#fcc419' : '#5ac8fa'} />
+          </View>
         </View>
 
         {sessionActive ? <QuizView /> : (
@@ -354,7 +464,6 @@ export default function TrainingScreen() {
               </LinearGradient>
             </Pressable>
 
-            {/* Topics */}
             <View style={ms.topicCard}>
               <Text style={ms.topicTitle}>What You'll Practice</Text>
               <View style={ms.topicGrid}>
@@ -376,7 +485,6 @@ export default function TrainingScreen() {
               </View>
             </View>
 
-            {/* Tip card */}
             <View style={ms.tipCard}>
               <Ionicons name="bulb" size={20} color="#fcc419" />
               <View style={{ flex: 1 }}>
@@ -385,7 +493,6 @@ export default function TrainingScreen() {
               </View>
             </View>
 
-            {/* Past sessions */}
             {trainingSessions.length > 0 && (
               <View style={ms.section}>
                 <Text style={ms.sectionTitle}>Recent Sessions</Text>
@@ -397,6 +504,11 @@ export default function TrainingScreen() {
           </>
         )}
       </ScrollView>
+
+      {/* Pause overlay at screen root — renders above ScrollView so touches always land */}
+      {sessionActive && sessionPaused && (
+        <PauseOverlay onResume={resumeTraining} />
+      )}
     </View>
   );
 }
@@ -408,6 +520,7 @@ const ms = StyleSheet.create({
   eyebrow: { color: 'rgba(90,200,250,0.7)', fontSize: 10, fontWeight: '800', letterSpacing: 2.5, marginBottom: 2 },
   pageTitle: { color: '#fff', fontSize: 24, fontWeight: '900', letterSpacing: -0.5 },
   badgePill: { width: 40, height: 40, borderRadius: 14, backgroundColor: 'rgba(90,200,250,0.1)', borderWidth: 1, borderColor: 'rgba(90,200,250,0.2)', alignItems: 'center', justifyContent: 'center' },
+  badgePillPaused: { backgroundColor: 'rgba(252,196,25,0.1)', borderColor: 'rgba(252,196,25,0.25)' },
   section: { gap: 10 },
   sectionTitle: { color: '#fff', fontSize: 17, fontWeight: '900' },
   startBtn: { borderRadius: 20, overflow: 'hidden' },

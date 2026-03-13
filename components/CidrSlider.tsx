@@ -91,16 +91,22 @@ function TrackGlow() {
 
 export function CidrSlider() {
   const { result, setCidr } = useSubnetStore();
+  const lastValue = React.useRef(result.cidr);
 
   const max = result.version === 'ipv6' ? 128 : 32;
 
-  const handleSliderChange = (_value: number) => {
-    Haptics.selectionAsync();
+  const handleSliderChange = (value: number) => {
+    const intVal = Math.round(value);
+    if (intVal !== lastValue.current) {
+      Haptics.selectionAsync();
+      lastValue.current = intVal;
+      setCidr(intVal);
+    }
   };
 
   const handleSliderComplete = (value: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setCidr(value);
+    setCidr(Math.round(value));
   };
 
   return (

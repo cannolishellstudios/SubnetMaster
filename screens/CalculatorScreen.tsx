@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import {
   ScrollView, StyleSheet, Text, View, Pressable, TextInput,
   Dimensions, KeyboardAvoidingView, Platform, DeviceEventEmitter, Modal,
@@ -9,28 +9,41 @@ import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
+import { useNavigation } from '@react-navigation/native';
 import { useSubnetStore } from '../store/useSubnetStore';
 
 const { width: SW } = Dimensions.get('window');
 
 /* ── v4/v6 Toggle ── */
 function VersionToggle() {
-  const { ipVersion, setIpVersion } = useSubnetStore();
+  const navigation = useNavigation<any>();
+  const { ipVersion, setIpVersion, isPremium } = useSubnetStore();
+  
   return (
     <View style={tgl.container}>
       <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setIpVersion('ipv4'); }} style={[tgl.pill, ipVersion==='ipv4'&&tgl.pillActive]}>
         <Text style={[tgl.pillText, ipVersion==='ipv4'&&tgl.pillTextActive]}>IPv4</Text>
       </Pressable>
-      <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setIpVersion('ipv6'); }} style={[tgl.pill, ipVersion==='ipv6'&&tgl.pillActive]}>
-        <Text style={[tgl.pillText, ipVersion==='ipv6'&&tgl.pillTextActive]}>IPv6</Text>
+      
+      <Pressable onPress={() => { 
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); 
+        if (!isPremium) {
+          navigation.navigate('Paywall');
+          return;
+        }
+        setIpVersion('ipv6'); 
+      }} style={[tgl.pill, ipVersion==='ipv6'&&tgl.pillActive, !isPremium && tgl.pillLocked]}>
+        {!isPremium && <Ionicons name="lock-closed" size={12} color="#fcc419" style={{marginRight: 4}} />}
+        <Text style={[tgl.pillText, ipVersion==='ipv6'&&tgl.pillTextActive, !isPremium && {color: '#fcc419'}]}>IPv6 Pro</Text>
       </Pressable>
     </View>
   );
 }
 const tgl = StyleSheet.create({
   container: { flexDirection:'row', backgroundColor:'rgba(255,255,255,0.05)', borderRadius:14, padding:3, gap:2 },
-  pill: { paddingHorizontal:12, paddingVertical:7, borderRadius:11 },
+  pill: { paddingHorizontal:12, paddingVertical:7, borderRadius:11, flexDirection: 'row', alignItems: 'center' },
   pillActive: { backgroundColor:'rgba(90,200,250,0.2)' },
+  pillLocked: { backgroundColor:'rgba(252,196,25,0.1)', borderWidth: 1, borderColor: 'rgba(252,196,25,0.3)', paddingVertical: 6 },
   pillText: { color:'rgba(255,255,255,0.35)', fontSize:13, fontWeight:'800' },
   pillTextActive: { color:'#5ac8fa' },
 });
@@ -91,6 +104,18 @@ function SegmentedIPv4Input() {
             {i < 3 && <Text style={[sip.dot, error && { color:'#ff453a55' }]}>.</Text>}
           </React.Fragment>
         ))}
+        {ipOnly !== '' && ipOnly !== '0.0.0.0' && (
+          <Pressable
+            onPress={() => {
+              Haptics.selectionAsync();
+              setInput(`0.0.0.0/${result.cidr}`);
+              refs[0]?.current?.focus();
+            }}
+            style={sip.clearBtn}
+            hitSlop={10}>
+            <Ionicons name="close-circle" size={20} color={error ? 'rgba(255,69,58,0.5)' : 'rgba(90,200,250,0.3)'} />
+          </Pressable>
+        )}
       </View>
       <View style={sip.metaRow}>
         <View style={[sip.scopeDot, { backgroundColor: error ? '#ff453a' : result.scopeColor }]} />
@@ -100,8 +125,100 @@ function SegmentedIPv4Input() {
   );
 }
 
+/* ── IPv6 Scan Modal ── */
+function IPv6ScanModal({ visible, onClose, onSelect }: { visible: boolean; onClose: () => void; onSelect: (addr: string) => void }) {
+  const [text, setText] = useState('');
+  const [found, setFound] = useState<string[]>([]);
+  const IPV6_RE = /([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}/g;
+
+  const scanText = (raw: string) => {
+    setText(raw);
+    const matches = Array.from(new Set((raw.match(IPV6_RE) ?? []).filter(m => m.includes(':') && m.length >= 2)));
+    setFound(matches);
+  };
+
+  const pasteClipboard = async () => {
+    const clip = await Clipboard.getStringAsync();
+    if (clip) scanText(clip);
+  };
+
+  useEffect(() => {
+    if (visible) { setText(''); setFound([]); pasteClipboard(); }
+  }, [visible]);
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={sc6.overlay} onPress={onClose}>
+        <Pressable style={sc6.sheet} onPress={() => {}}>
+          <View style={sc6.handle} />
+          <Text style={sc6.title}>Find IPv6 Address</Text>
+          <Text style={sc6.sub}>Paste any text — router output, configs, emails — and matching addresses appear below.</Text>
+          <View style={sc6.inputWrap}>
+            <TextInput
+              value={text}
+              onChangeText={scanText}
+              placeholder="Paste text containing IPv6 addresses…"
+              placeholderTextColor="rgba(255,255,255,0.2)"
+              multiline
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={sc6.textInput}
+              selectionColor="#8B7CFF"
+            />
+          </View>
+          <Pressable onPress={pasteClipboard} style={sc6.pasteBtn}>
+            <Ionicons name="clipboard-outline" size={16} color="#8B7CFF" />
+            <Text style={sc6.pasteBtnText}>Paste from Clipboard</Text>
+          </Pressable>
+          {found.length > 0 ? (
+            <View style={sc6.results}>
+              <Text style={sc6.resultsLabel}>FOUND {found.length} ADDRESS{found.length !== 1 ? 'ES' : ''}</Text>
+              {found.map((addr, i) => (
+                <Pressable key={i} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy); onSelect(addr); onClose(); }} style={sc6.addrRow}>
+                  <Text style={sc6.addrText} numberOfLines={1} adjustsFontSizeToFit>{addr}</Text>
+                  <View style={sc6.useChip}><Ionicons name="arrow-up-circle" size={16} color="#8B7CFF" /><Text style={sc6.useChipText}>Use</Text></View>
+                </Pressable>
+              ))}
+            </View>
+          ) : text.length > 0 ? (
+            <View style={sc6.empty}>
+              <Ionicons name="search-outline" size={28} color="rgba(255,255,255,0.12)" />
+              <Text style={sc6.emptyText}>No IPv6 addresses found</Text>
+            </View>
+          ) : null}
+          <Pressable onPress={onClose} style={sc6.cancelBtn}>
+            <Text style={sc6.cancelText}>Cancel</Text>
+          </Pressable>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+const sc6 = StyleSheet.create({
+  overlay: { flex:1, backgroundColor:'rgba(0,0,0,0.6)', justifyContent:'flex-end' },
+  sheet: { backgroundColor:'#0d1020', borderTopLeftRadius:28, borderTopRightRadius:28, padding:22, paddingBottom:40, gap:14, borderWidth:1, borderColor:'rgba(139,124,255,0.15)' },
+  handle: { width:40, height:4, borderRadius:2, backgroundColor:'rgba(255,255,255,0.15)', alignSelf:'center', marginBottom:2 },
+  title: { color:'#fff', fontSize:18, fontWeight:'900' },
+  sub: { color:'rgba(255,255,255,0.4)', fontSize:13, fontWeight:'600', lineHeight:18, marginTop:-6 },
+  inputWrap: { backgroundColor:'rgba(255,255,255,0.05)', borderRadius:14, borderWidth:1, borderColor:'rgba(139,124,255,0.2)' },
+  textInput: { color:'#fff', fontSize:13, fontWeight:'600', padding:12, minHeight:70, maxHeight:110, textAlignVertical:'top' },
+  pasteBtn: { flexDirection:'row', alignItems:'center', justifyContent:'center', gap:6, backgroundColor:'rgba(139,124,255,0.12)', borderRadius:12, paddingVertical:11, borderWidth:1, borderColor:'rgba(139,124,255,0.25)' },
+  pasteBtnText: { color:'#8B7CFF', fontSize:14, fontWeight:'800' },
+  results: { gap:8 },
+  resultsLabel: { color:'rgba(139,124,255,0.6)', fontSize:10, fontWeight:'800', letterSpacing:2 },
+  addrRow: { flexDirection:'row', alignItems:'center', justifyContent:'space-between', backgroundColor:'rgba(139,124,255,0.08)', borderRadius:14, paddingHorizontal:14, paddingVertical:12, borderWidth:1, borderColor:'rgba(139,124,255,0.2)', gap:10 },
+  addrText: { color:'#fff', fontSize:14, fontWeight:'800', fontVariant:['tabular-nums'], flex:1 },
+  useChip: { flexDirection:'row', alignItems:'center', gap:4 },
+  useChipText: { color:'#8B7CFF', fontSize:13, fontWeight:'800' },
+  empty: { alignItems:'center', gap:8, paddingVertical:16 },
+  emptyText: { color:'rgba(255,255,255,0.3)', fontSize:13, fontWeight:'600' },
+  cancelBtn: { backgroundColor:'rgba(255,255,255,0.05)', borderRadius:14, paddingVertical:13, alignItems:'center', borderWidth:1, borderColor:'rgba(255,255,255,0.07)' },
+  cancelText: { color:'rgba(255,255,255,0.45)', fontSize:15, fontWeight:'800' },
+});
+
 function IPv6Input() {
   const { input, result, setInput, error } = useSubnetStore();
+  const [scanVisible, setScanVisible] = useState(false);
   const ipOnly = input.includes('/') ? input.split('/')[0] : input;
 
   const handleChange = (text: string) => {
@@ -130,6 +247,9 @@ function IPv6Input() {
           returnKeyType="done"
           selectionColor="#5ac8fa"
         />
+        <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setScanVisible(true); }} style={sip.scanBtn} hitSlop={10}>
+          <Ionicons name="scan-outline" size={20} color="rgba(139,124,255,0.7)" />
+        </Pressable>
         {ipOnly.length > 0 && (
           <Pressable onPress={() => { Haptics.selectionAsync(); handleChange(''); }} style={sip.clearBtn} hitSlop={10}>
             <Ionicons name="close-circle" size={20} color={error ? 'rgba(255,69,58,0.5)' : 'rgba(90,200,250,0.3)'} />
@@ -140,6 +260,11 @@ function IPv6Input() {
         <View style={[sip.scopeDot, { backgroundColor: error ? '#ff453a' : result.scopeColor }]} />
         <Text style={sip.scopeLabel}>{error ? 'Invalid Format' : result.subnetMeaning}</Text>
       </View>
+      <IPv6ScanModal
+        visible={scanVisible}
+        onClose={() => setScanVisible(false)}
+        onSelect={(addr) => setInput(`${addr}/${result.cidr}`)}
+      />
     </View>
   );
 }
@@ -151,11 +276,12 @@ const sip = StyleSheet.create({
   errorLabel: { color:'#ff453a', fontSize:10, fontWeight:'800', letterSpacing:1.5 },
   scopeText: { color:'rgba(255,255,255,0.45)', fontSize:11, fontWeight:'700' },
   shell: { flexDirection:'row', alignItems:'center', backgroundColor:'rgba(2,8,20,0.9)', borderRadius:18, borderWidth:1, borderColor:'rgba(90,200,250,0.18)', paddingHorizontal:14, paddingVertical:8 },
-  octetInput: { width:(SW-32-56-28-28)/4, textAlign:'center', color:'#fff', fontSize:22, fontWeight:'900', fontVariant:['tabular-nums'], paddingVertical:8 },
+  octetInput: { width:(SW-32-56-28-36)/4, textAlign:'center', color:'#fff', fontSize:22, fontWeight:'900', fontVariant:['tabular-nums'], paddingVertical:8 },
   dot: { color:'rgba(90,200,250,0.5)', fontSize:26, fontWeight:'300', marginHorizontal:2 },
   v6Shell: { flexDirection:'row', alignItems:'center', backgroundColor:'rgba(2,8,20,0.9)', borderRadius:18, borderWidth:1, borderColor:'rgba(90,200,250,0.18)' },
   v6Input: { flex:1, color:'#fff', fontSize:18, fontWeight:'800', fontVariant:['tabular-nums'], paddingHorizontal:16, paddingVertical:14 },
-  clearBtn: { paddingRight:16 },
+  clearBtn: { paddingRight:14 },
+  scanBtn: { paddingLeft:10, paddingRight:4 },
   metaRow: { flexDirection:'row', alignItems:'center', gap:8 },
   scopeDot: { width:8, height:8, borderRadius:4 },
   scopeLabel: { color:'rgba(255,255,255,0.5)', fontSize:12, fontWeight:'700' },
@@ -345,6 +471,7 @@ function CompactResults() {
       <View style={rt.row}><CopyTile label="FIRST HOST" value={result.firstHost} /><CopyTile label="LAST HOST" value={result.lastHost} /></View>
       <View style={rt.row}><CopyTile label="SUBNET MASK" value={result.mask} /><CopyTile label="USABLE IPs" value={result.usableHosts} accent /></View>
       <View style={rt.row}><CopyTile label="WILDCARD MASK" value={result.wildcardMask} /><CopyTile label="CLASS" value={`Class ${result.ipClass}`} /></View>
+      <View style={rt.row}><CopyTile label="NEXT SUBNET" value={result.nextSubnet ?? '—'} /></View>
     </View>
   );
 }

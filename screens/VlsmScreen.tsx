@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import Svg, { Path, Circle } from 'react-native-svg';
+import { useNavigation } from '@react-navigation/native';
 import { useSubnetStore, type VlsmResult } from '../store/useSubnetStore';
 
 const { width: SW } = Dimensions.get('window');
@@ -389,6 +390,7 @@ const vbi = StyleSheet.create({
 
 /* ── Main Screen ── */
 export default function VlsmScreen() {
+  const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
   const [showExport, setShowExport] = useState(false);
@@ -396,7 +398,11 @@ export default function VlsmScreen() {
   const {
     vlsmBaseInput, vlsmCidrInput, vlsmRequests, vlsmResults, vlsmTotalSpace, vlsmUsedSpace, error,
     addVlsmRequest, updateVlsmRequest, removeVlsmRequest, calculateVlsmLayout, clearVlsm,
+    isPremium, hasUsedFreeVlsm,
   } = useSubnetStore();
+
+  // Gate: free users get 1 calculation. After that, Pro required.
+  const isGated = !isPremium && hasUsedFreeVlsm;
 
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener('scrollToTop', (tabName: string) => {
@@ -404,6 +410,15 @@ export default function VlsmScreen() {
     });
     return ()=>sub.remove();
   }, []);
+
+  const handleGenerate = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    if (isGated) {
+      navigation.navigate('Paywall');
+      return;
+    }
+    calculateVlsmLayout();
+  };
 
   const totalRequestedHosts = useMemo(()=>vlsmRequests.reduce((sum,item)=>sum+(parseInt(item.hosts||'0',10)||0),0),[vlsmRequests]);
   const hostsAvailableLive = useMemo(()=>{
@@ -423,6 +438,18 @@ export default function VlsmScreen() {
           <View><Text style={s.eyebrow}>NETWORK DESIGN</Text><Text style={s.pageTitle}>VLSM Calculator</Text></View>
           <View style={s.badgePill}><Ionicons name="git-network" size={16} color="#5ac8fa"/></View>
         </View>
+
+        {/* Pro gate banner — shown after free calc is used */}
+        {isGated && (
+          <Pressable onPress={()=>navigation.navigate('Paywall')} style={s.gateBanner}>
+            <Ionicons name="lock-closed" size={16} color="#fcc419"/>
+            <View style={{flex:1}}>
+              <Text style={s.gateBannerTitle}>Unlock Unlimited Calculations</Text>
+              <Text style={s.gateBannerSub}>You've used your free VLSM calculation. Upgrade to Pro for unlimited access.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#fcc419"/>
+          </Pressable>
+        )}
 
         {/* Base network */}
         <View style={s.card}>
@@ -450,9 +477,23 @@ export default function VlsmScreen() {
         <View style={s.card}>
           <View style={s.cardHeader}>
             <Text style={s.cardTitle}>Subnet Requirements</Text>
-            <Pressable onPress={()=>{Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);addVlsmRequest();}} style={s.addBtn}>
-              <Ionicons name="add" size={18} color="#5ac8fa"/>
-              <Text style={s.addBtnText}>Add</Text>
+            <Pressable onPress={()=>{
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              // FREEMIUM CHECK: Limit to 3 subnets if not pro
+              if (!isPremium && vlsmRequests.length >= 3) {
+                navigation.navigate('Paywall');
+                return;
+              }
+              addVlsmRequest();
+            }} style={s.addBtn}>
+              {!isPremium && vlsmRequests.length >= 3 ? (
+                <Ionicons name="lock-closed" size={14} color="#fcc419"/>
+              ) : (
+                <Ionicons name="add" size={18} color="#5ac8fa"/>
+              )}
+              <Text style={[s.addBtnText, !isPremium && vlsmRequests.length >= 3 && {color: '#fcc419'}]}>
+                Add
+              </Text>
             </Pressable>
           </View>
 
@@ -487,10 +528,15 @@ export default function VlsmScreen() {
           </View>
 
           <View style={s.actionRow}>
-            <Pressable onPress={()=>{Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);calculateVlsmLayout();}} style={s.generateBtn}>
-              <LinearGradient colors={['#5ac8fa','#3aa8e0']} style={s.generateGrad}>
-                <Ionicons name="flash" size={18} color="#020408"/>
-                <Text style={s.generateText}>Generate Layout</Text>
+            <Pressable onPress={handleGenerate} style={s.generateBtn}>
+              <LinearGradient
+                colors={isGated ? ['rgba(252,196,25,0.2)','rgba(252,196,25,0.1)'] : ['#5ac8fa','#3aa8e0']}
+                style={s.generateGrad}
+              >
+                <Ionicons name={isGated ? 'lock-closed' : 'flash'} size={18} color={isGated ? '#fcc419' : '#020408'}/>
+                <Text style={[s.generateText, isGated && {color:'#fcc419'}]}>
+                  {isGated ? 'Pro Required — Upgrade' : 'Generate Layout'}
+                </Text>
               </LinearGradient>
             </Pressable>
             <Pressable onPress={()=>{Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);clearVlsm();}} style={s.clearBtn}>
@@ -498,6 +544,13 @@ export default function VlsmScreen() {
             </Pressable>
           </View>
           {error?<Text style={s.error}>{error}</Text>:null}
+
+          {!isPremium && !hasUsedFreeVlsm && (
+            <View style={s.freeTrialPill}>
+              <Ionicons name="gift-outline" size={14} color="#51cf66"/>
+              <Text style={s.freeTrialText}>1 free calculation available</Text>
+            </View>
+          )}
         </View>
 
         {/* Results */}
@@ -521,11 +574,21 @@ export default function VlsmScreen() {
               </View>
             </View>
 
-            <Pressable onPress={()=>{Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);setShowExport(true);}} style={s.exportMainBtn}>
-              <LinearGradient colors={['rgba(90,200,250,0.15)','rgba(90,200,250,0.08)']} style={s.exportMainGrad}>
-                <Ionicons name="share-outline" size={20} color="#5ac8fa"/>
-                <Text style={s.exportMainText}>Export / Share Results</Text>
-                <Ionicons name="chevron-up" size={16} color="rgba(90,200,250,0.5)"/>
+            <Pressable onPress={()=>{
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              // FREEMIUM CHECK: Lock Exports
+              if (!isPremium) {
+                navigation.navigate('Paywall');
+                return;
+              }
+              setShowExport(true);
+            }} style={s.exportMainBtn}>
+              <LinearGradient colors={!isPremium ? ['rgba(255,255,255,0.05)', 'rgba(255,255,255,0.02)'] : ['rgba(90,200,250,0.15)','rgba(90,200,250,0.08)']} style={[s.exportMainGrad, !isPremium && { borderColor: 'rgba(255,255,255,0.1)' }]}>
+                <Ionicons name={isPremium ? "share-outline" : "lock-closed"} size={20} color={isPremium ? "#5ac8fa" : "rgba(255,255,255,0.4)"}/>
+                <Text style={[s.exportMainText, !isPremium && { color: 'rgba(255,255,255,0.4)' }]}>
+                  {isPremium ? 'Export / Share Results' : 'Pro Feature: Export Results'}
+                </Text>
+                {isPremium && <Ionicons name="chevron-up" size={16} color="rgba(90,200,250,0.5)"/>}
               </LinearGradient>
             </Pressable>
           </>
@@ -553,6 +616,9 @@ const s = StyleSheet.create({
   eyebrow:{color:'rgba(90,200,250,0.7)',fontSize:10,fontWeight:'800',letterSpacing:2.5,marginBottom:2},
   pageTitle:{color:'#fff',fontSize:24,fontWeight:'900',letterSpacing:-0.5},
   badgePill:{width:40,height:40,borderRadius:14,backgroundColor:'rgba(90,200,250,0.1)',borderWidth:1,borderColor:'rgba(90,200,250,0.2)',alignItems:'center',justifyContent:'center'},
+  gateBanner:{flexDirection:'row',alignItems:'center',gap:12,backgroundColor:'rgba(252,196,25,0.08)',borderRadius:16,padding:14,borderWidth:1,borderColor:'rgba(252,196,25,0.2)'},
+  gateBannerTitle:{color:'#fcc419',fontSize:13,fontWeight:'800'},
+  gateBannerSub:{color:'rgba(252,196,25,0.7)',fontSize:12,fontWeight:'600',marginTop:2,lineHeight:16},
   card:{backgroundColor:'rgba(10,25,60,0.25)',borderRadius:22,padding:16,borderWidth:1,borderColor:'rgba(255,255,255,0.06)',gap:12},
   cardLabel:{color:'rgba(90,200,250,0.6)',fontSize:10,fontWeight:'800',letterSpacing:2},
   cardHeader:{flexDirection:'row',justifyContent:'space-between',alignItems:'center'},
@@ -581,6 +647,8 @@ const s = StyleSheet.create({
   generateGrad:{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,paddingVertical:16},
   generateText:{color:'#020408',fontSize:17,fontWeight:'900'},
   clearBtn:{width:52,borderRadius:18,backgroundColor:'rgba(255,123,128,0.1)',borderWidth:1,borderColor:'rgba(255,123,128,0.2)',alignItems:'center',justifyContent:'center'},
+  freeTrialPill:{flexDirection:'row',alignItems:'center',gap:6,backgroundColor:'rgba(81,207,102,0.1)',borderRadius:20,paddingHorizontal:14,paddingVertical:7,borderWidth:1,borderColor:'rgba(81,207,102,0.2)',alignSelf:'center'},
+  freeTrialText:{color:'#51cf66',fontSize:12,fontWeight:'800'},
   capacityDesc:{color:'rgba(255,255,255,0.5)',fontSize:13,lineHeight:18},
   capacityList:{gap:6},
   capacityRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',backgroundColor:'rgba(255,255,255,0.03)',paddingHorizontal:12,paddingVertical:10,borderRadius:12,borderWidth:1,borderColor:'rgba(255,255,255,0.05)'},
@@ -593,8 +661,8 @@ const s = StyleSheet.create({
   readyText:{color:'#5ac8fa',fontSize:12,fontWeight:'800'},
   resultsList:{gap:10},
   exportMainBtn:{borderRadius:20,overflow:'hidden'},
-  exportMainGrad:{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10,paddingVertical:16,borderRadius:20,borderWidth:1,borderColor:'rgba(90,200,250,0.2)'},
-  exportMainText:{color:'#5ac8fa',fontSize:16,fontWeight:'900',flex:1,textAlign:'center'},
+  exportMainGrad:{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10,paddingVertical:16,borderRadius:20,borderWidth:1},
+  exportMainText:{fontSize:16,fontWeight:'900',flex:1,textAlign:'center'},
   emptyCard:{alignItems:'center',gap:8,paddingVertical:40},
   emptyTitle:{color:'rgba(255,255,255,0.5)',fontSize:16,fontWeight:'800'},
   emptyText:{color:'rgba(255,255,255,0.35)',fontSize:13,textAlign:'center',lineHeight:20,maxWidth:'80%'},

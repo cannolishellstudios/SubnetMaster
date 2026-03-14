@@ -8,7 +8,7 @@ export default function SettingsScreen({ navigation }: any) {
   const { showFavoritesOnly, setShowFavoritesOnly, isPremium } = useSubnetStore();
 
   const openEmail = () => Linking.openURL('mailto:cannolishellstudios@gmail.com?subject=SubnetMaster Support');
-  const openPrivacy = () => Linking.openURL('https://cannolishell.github.io/SubnetMaster/privacy-policy');
+  const openPrivacy = () => Linking.openURL('https://cannolishellstudios.github.io/subnet-privacy/');
 
   return (
     <SafeAreaView style={styles.container}>

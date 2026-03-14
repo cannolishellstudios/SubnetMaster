@@ -39,6 +39,7 @@ type SubnetState = {
   sessionPaused: boolean;
   pausedTimeAccumMs: number;
   pauseStartTime: number;
+  lastResumedAt: number; // Added to prevent instant pause bounce
 
   setIpVersion: (v: IPVersion) => void; setInput: (value: string) => void; setCidr: (value: number) => void; recalculate: (value?: string) => void; toggleFavorite: (id: string) => void; clearHistory: () => void; deleteHistoryItem: (id: string) => void; setShowFavoritesOnly: (v: boolean) => void; loadHistory: () => Promise<void>; restoreCalculation: (item: RecentCalculation) => void; setVlsmBaseInput: (ip: string) => void; setVlsmCidr: (cidr: string) => void; addVlsmRequest: () => void; updateVlsmRequest: (id: string, patch: Partial<VlsmRequestItem>) => void; removeVlsmRequest: (id: string) => void; calculateVlsmLayout: () => void; clearVlsm: () => void; setFlsmBaseInput: (v: string) => void; setFlsmSubnetCount: (v: string) => void; calculateFlsm: () => void; clearFlsm: () => void; setTrainingDifficulty: (d: 'beginner'|'intermediate'|'advanced') => void; setQuestionCount: (n: number) => void; startTrainingSession: () => void; answerQuestion: (answer: string) => void; nextQuestion: () => void; endTrainingSession: () => void; loadTrainingSessions: () => Promise<void>; pauseTraining: () => void; resumeTraining: () => void;
 };
@@ -60,7 +61,8 @@ export const useSubnetStore = create<SubnetState>()(
       vlsmBaseInput: '192.168.10.0', vlsmCidrInput: '24', vlsmRequests: [{ id: makeId('vlsm'), label: 'Sales', hosts: '50', color: VLSM_COLORS[0] }, { id: makeId('vlsm'), label: 'IT', hosts: '20', color: VLSM_COLORS[1] }, { id: makeId('vlsm'), label: 'IoT', hosts: '10', color: VLSM_COLORS[2] }], vlsmResults: [], vlsmTotalSpace: 0, vlsmUsedSpace: 0,
       flsmBaseInput: '192.168.1.0', flsmSubnetCount: '4', flsmResults: [], flsmError: '',
       trainingDifficulty: 'beginner', questionCount: 10, currentQuestion: null, currentQuestionIndex: 0, selectedAnswer: null, showExplanation: false, sessionQuestions: [], sessionCorrect: 0, sessionWrong: 0, sessionStartTime: 0, sessionActive: false, trainingSessions: [],
-      sessionPaused: false, pausedTimeAccumMs: 0, pauseStartTime: 0,
+      
+      sessionPaused: false, pausedTimeAccumMs: 0, pauseStartTime: 0, lastResumedAt: 0,
       
       hasSeenOnboarding: false,
       setHasSeenOnboarding: (v) => set({ hasSeenOnboarding: v }),
@@ -142,13 +144,33 @@ export const useSubnetStore = create<SubnetState>()(
       clearFlsm: () => set({flsmResults:[],flsmError:''}),
       setTrainingDifficulty: (d) => set({trainingDifficulty:d}),
       setQuestionCount: (n) => set({questionCount:n}),
-      startTrainingSession: () => { const{trainingDifficulty,questionCount}=get(); const questions=Array.from({length:questionCount},()=>generateQuestion(trainingDifficulty)); set({sessionQuestions:questions,currentQuestion:questions[0],currentQuestionIndex:0,selectedAnswer:null,showExplanation:false,sessionCorrect:0,sessionWrong:0,sessionStartTime:Date.now(),sessionActive:true,sessionPaused:false,pausedTimeAccumMs:0,pauseStartTime:0}); },
+      startTrainingSession: () => { const{trainingDifficulty,questionCount}=get(); const questions=Array.from({length:questionCount},()=>generateQuestion(trainingDifficulty)); set({sessionQuestions:questions,currentQuestion:questions[0],currentQuestionIndex:0,selectedAnswer:null,showExplanation:false,sessionCorrect:0,sessionWrong:0,sessionStartTime:Date.now(),sessionActive:true,sessionPaused:false,pausedTimeAccumMs:0,pauseStartTime:0,lastResumedAt:0}); },
       answerQuestion: (answer) => { const{currentQuestion,sessionCorrect,sessionWrong}=get(); if(!currentQuestion||get().selectedAnswer)return; const ok=answer===currentQuestion.correctAnswer; set({selectedAnswer:answer,showExplanation:true,sessionCorrect:ok?sessionCorrect+1:sessionCorrect,sessionWrong:ok?sessionWrong:sessionWrong+1}); },
       nextQuestion: () => { const{currentQuestionIndex,sessionQuestions}=get(); const next=currentQuestionIndex+1; if(next>=sessionQuestions.length){get().endTrainingSession();return;} set({currentQuestion:sessionQuestions[next],currentQuestionIndex:next,selectedAnswer:null,showExplanation:false}); },
       endTrainingSession: () => { const{sessionCorrect,sessionWrong,sessionStartTime,trainingDifficulty,trainingSessions,pausedTimeAccumMs,sessionPaused,pauseStartTime}=get(); const extraPaused=sessionPaused?(Date.now()-pauseStartTime):0; const session: TrainingSession={id:makeId('s'),difficulty:trainingDifficulty,totalQuestions:sessionCorrect+sessionWrong,correctAnswers:sessionCorrect,wrongAnswers:sessionWrong,completedAt:Date.now(),timeSpentMs:Date.now()-sessionStartTime-(pausedTimeAccumMs+extraPaused)}; const updated=[session,...trainingSessions].slice(0,50); set({sessionActive:false,currentQuestion:null,trainingSessions:updated,sessionPaused:false}); },
       loadTrainingSessions: async () => {},
-      pauseTraining: () => { const{sessionActive,sessionPaused}=get(); if(!sessionActive||sessionPaused)return; set({sessionPaused:true,pauseStartTime:Date.now()}); },
-      resumeTraining: () => { const{sessionPaused,pausedTimeAccumMs,pauseStartTime}=get(); if(!sessionPaused)return; set({sessionPaused:false,pausedTimeAccumMs:pausedTimeAccumMs+(Date.now()-pauseStartTime),pauseStartTime:0}); },
+      
+      pauseTraining: () => { 
+        const { sessionActive, sessionPaused, lastResumedAt } = get(); 
+        if (!sessionActive || sessionPaused) return; 
+
+        // Cooldown buffer to prevent instant bouncing
+        if (Date.now() - (lastResumedAt || 0) < 500) return; 
+
+        set({ sessionPaused: true, pauseStartTime: Date.now() }); 
+      },
+      
+      resumeTraining: () => { 
+        const { sessionPaused, pausedTimeAccumMs, pauseStartTime } = get(); 
+        if (!sessionPaused) return; 
+        
+        set({ 
+          sessionPaused: false, 
+          pausedTimeAccumMs: pausedTimeAccumMs + (Date.now() - pauseStartTime), 
+          pauseStartTime: 0,
+          lastResumedAt: Date.now() 
+        }); 
+      },
     }),
     {
       name: 'subnetpro-store-v3',
